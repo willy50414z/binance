@@ -74,12 +74,13 @@ def create_trade_record(date: datetime, trade_type: TradeType, price: Decimal, a
         return None
 
 
-def log_trade_info(current_price: Decimal, invest_amt: Decimal, leverage_ratio: Decimal,
-                   trade_record_list: List[TradeRecord],
-                   end_datetime: datetime = None):
+def build_trade_detail_list(current_price: Decimal, invest_amt: Decimal, leverage_ratio: Decimal,
+                            trade_record_list: List[TradeRecord],
+                            end_datetime: datetime = None, trade_detail_list=None):
     """
 
     Args:
+        trade_detail_list:
         current_price:
         invest_amt: 投資金額(未被槓桿放大)
         leverage_ratio: 槓桿倍數
@@ -89,8 +90,9 @@ def log_trade_info(current_price: Decimal, invest_amt: Decimal, leverage_ratio: 
     Returns:
 
     """
+    if trade_detail_list is None:
+        trade_detail_list = []
     trade_record_list.sort(key=lambda tr: tr.date)
-    trade_detail_list = List[TradeDetail]
     for trade_record in trade_record_list:
         if end_datetime and end_datetime < trade_record.date:
             break

@@ -78,9 +78,6 @@ class BinanceSvc:
             f"price range[{lower_bound} - {upper_bound}]grid_levels[{grid_levels}]invest_amt[{invest_amt}]level_amt_change[{level_amt_change}]leverage_ratio[{leverage_ratio}]")
 
         # 計算買賣策略
-        ##計算各價位投資金額
-        inv_amt_list = []
-
         ## 計算網格價格
         trade_price = upper_bound
         trade_price_list = []
@@ -136,26 +133,30 @@ class BinanceSvc:
                     trade_record = trade_svc.create_trade_record(daily_kline.start_time, TradeType.BUY,
                                                                  hedge_trade_price_amt.price,
                                                                  hedge_trade_price_amt.buy_amt, HandleFeeType.MAKER);
-                    if trade_record:
-                        buy_acct_trade_record.append(trade_record)
 
                     trade_record = trade_svc.create_trade_record(daily_kline.start_time, TradeType.SELL,
                                                                  hedge_trade_price_amt.price,
                                                                  hedge_trade_price_amt.sellAmt, HandleFeeType.MAKER)
+
+                    if trade_record:
+                        buy_acct_trade_record.append(trade_record)
+
                     if trade_record:
                         sell_acct_trade_record.append(trade_record)
 
-                    if len(buy_acct_trade_record) > 0:
-                        logging.info(
-                            trade_svc.log_trade_info(daily_kline.close, Decimal(invest_amt), leverage_ratio,
-                                                     buy_acct_trade_record,
-                                                     daily_kline.end_time))
+        if len(buy_acct_trade_record) > 0:
+            logging.info(
+                trade_svc.build_trade_detail_list(daily_kline_list[len(daily_kline_list) - 1].close, Decimal(invest_amt),
+                                                  leverage_ratio,
+                                                  buy_acct_trade_record,
+                                                  daily_kline_list[len(daily_kline_list) - 1].end_time))
 
-                    if len(sell_acct_trade_record) > 0:
-                        logging.info(
-                            trade_svc.log_trade_info(daily_kline.close, Decimal(invest_amt), leverage_ratio,
-                                                     sell_acct_trade_record,
-                                                     daily_kline.end_time))
+        if len(sell_acct_trade_record) > 0:
+            logging.info(
+                trade_svc.build_trade_detail_list(daily_kline_list[len(daily_kline_list) - 1].close, Decimal(invest_amt),
+                                                  leverage_ratio,
+                                                  sell_acct_trade_record,
+                                                  daily_kline_list[len(daily_kline_list) - 1].end_time))
 
 
 def calc_current_price(y, avg_price, total_amt):
