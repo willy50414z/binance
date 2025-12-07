@@ -13,6 +13,7 @@ from com.willy.binance.enums.trade_type import TradeType
 from com.willy.binance.service import tech_idx_svc, trade_svc
 from com.willy.binance.strategy.ma_dca_strategy import TradeLevel
 from com.willy.binance.strategy.trade_strategy import TradingStrategy
+from com.willy.binance.util import type_util
 
 
 def calc_first_layer_invest_amt(total_invest_amt: Decimal, level_gap: Decimal, levels: Decimal):
@@ -95,18 +96,24 @@ class MovingAverageStrategy(TradingStrategy):
         if trade_record:
             return trade_record
 
-    def get_trade_record_by_date(self, dt: datetime) -> TradeRecord:
+    def get_trade_record_by_date(self, dt: datetime) -> tuple[None, None] | tuple[TradeRecord, datetime]:
         data_fetch_start = dt - self.lookback_tickets
 
         # 2. 獲取並準備數據
         df = self.binance_svc.get_klines(self.product, Client.KLINE_INTERVAL_15MINUTE, data_fetch_start, dt)
+
+        if df.iloc[-1].start_time != dt:
+            print(
+                f"can't get lastest price, request dt[{type_util.datetime_to_str(dt, "%Y/%m/%d %H:%M:%S")}]"
+                f"price start_time[{type_util.datetime_to_str(df.iloc[-1].start_time, "%Y/%m/%d %H:%M:%S")}]")
+            return None, df
 
         self.prepare_data(self.initial_capital, df, self.other_args)
 
         # 再篩選一次df，避免拿到多的資料
         df = df[(df["start_time"] <= dt)]
 
-        return self.get_trade_record(df.iloc[-1], self.trade_detail)
+        return self.get_trade_record(df.iloc[-1], self.trade_detail), df
 
     @property
     def invest_and_guarantee_ratio(self) -> float:
