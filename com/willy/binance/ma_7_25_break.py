@@ -1,5 +1,6 @@
 import datetime
 from decimal import ROUND_HALF_UP
+from zoneinfo import ZoneInfo
 
 from com.willy.binance.config import const
 from com.willy.binance.config.config_util import config_util
@@ -16,8 +17,8 @@ line_user_id = config.get("userid_willy")
 
 
 def lambda_handler(event, context):
-    # now_utc_time = datetime.now().astimezone(ZoneInfo("UTC"))
-    now_utc_time = type_util.str_to_date_min("202512061800")
+    now_utc_time = datetime.datetime.now().astimezone(ZoneInfo("UTC"))
+    # now_utc_time = type_util.str_to_date_min("202512061800")
     trade_record, df = maStrategy.get_trade_record_by_date(now_utc_time)
     print(
         f"{type_util.datetime_to_str(datetime.datetime.now(), "%Y/%m/%d %H:%M:%S")} start check ma_7_25_break trade record, now_utc_time[{type_util.datetime_to_str(now_utc_time, "%Y/%m/%d %H:%M:%S")}]trade_record[{trade_record}]df[{df[len(df) - 2:]}]")
