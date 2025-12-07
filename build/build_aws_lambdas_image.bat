@@ -19,6 +19,7 @@ docker push 449068335280.dkr.ecr.ap-southeast-1.amazonaws.com/binance_trade_bot/
 @REM us-east-1
 @REM ap-southeast-1
 @REM
+@REM aws login
 @REM aws ecr get-login-password --region ap-southeast-1 | docker login --username AWS --password-stdin 449068335280.dkr.ecr.ap-southeast-1.amazonaws.com
 @REM
 @REM docker tag aa683bd28809 449068335280.dkr.ecr.us-east-1.amazonaws.com/binance_trade_bot/ma_7_25_break:latest
