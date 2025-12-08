@@ -416,7 +416,7 @@ def analyze_trading_strategy(df: pd.DataFrame, initial_capital: float, risk_free
     # 最大回檔 (Max Drawdown, MDD)
     df['peak'] = df['equity'].cummax()
     df['drawdown'] = (df['equity'] / df['peak']) - 1
-    max_drawdown = df['drawdown'].min()
+    max_drawdown = round(df['drawdown'].min(), 2)
 
     # 年化波動度 (Volatility)
     # 這裡使用操作報酬率的標準差，並年化 (假設每天一次操作，如果頻率不同需調整)
@@ -458,9 +458,9 @@ def analyze_trading_strategy(df: pd.DataFrame, initial_capital: float, risk_free
         '總交易筆數': total_trades,
 
         # 報酬指標
-        '總報酬率 (%)': total_return * 100,
-        '年化報酬率 CAGR (%)': cagr * 100,
-        '獲利因子': profit_factor,
+        '總報酬率 (%)': round(total_return * 100, 2),
+        '年化報酬率 CAGR (%)': round(cagr * 100, 2),
+        '獲利因子': round(profit_factor, 2),
 
         # 風險指標
         '最大回檔 MDD (%)': abs(max_drawdown) * 100,
@@ -468,11 +468,11 @@ def analyze_trading_strategy(df: pd.DataFrame, initial_capital: float, risk_free
         '夏普比率': sharpe_ratio,
 
         # 交易特性指標
-        '勝率 (%)': win_rate * 100,
-        '平均獲利金額': avg_win,
-        '平均虧損金額 (絕對值)': abs(avg_loss),
+        '勝率 (%)': round(win_rate * 100, 2),
+        '平均獲利金額': round(avg_win, 2),
+        '平均虧損金額 (絕對值)': round(abs(avg_loss), 2),
         '最大連續虧損次數': max_consecutive_losses,
-        '平均賺賠比': abs(avg_win / avg_loss) if avg_loss != 0 else np.inf,
+        '平均賺賠比': round(abs(avg_win / avg_loss) if avg_loss != 0 else np.inf, 2),
     }
 
     # 將結果轉換為 DataFrame

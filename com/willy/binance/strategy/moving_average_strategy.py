@@ -1,69 +1,26 @@
-from datetime import timedelta, datetime
+from datetime import datetime
 from decimal import Decimal
 
 import numpy as np
 import pandas as pd
 from binance import Client
+from pandas import DataFrame
 
-from com.willy.binance.dto.trade_detail import TradeDetail
 from com.willy.binance.dto.trade_record import TradeRecord
 from com.willy.binance.enums.handle_fee_type import HandleFeeType
 from com.willy.binance.enums.trade_reason import TradeReason, TradeReasonType
 from com.willy.binance.enums.trade_type import TradeType
 from com.willy.binance.service import tech_idx_svc, trade_svc
-from com.willy.binance.strategy.ma_dca_strategy import TradeLevel
 from com.willy.binance.strategy.trade_strategy import TradingStrategy
 from com.willy.binance.util import type_util
 
 
-def calc_first_layer_invest_amt(total_invest_amt: Decimal, level_gap: Decimal, levels: Decimal):
-    if levels <= 0:
-        return 0.0
-    if level_gap == 1:
-        return total_invest_amt / levels
-    return round(total_invest_amt * (1 - level_gap) / (1 - level_gap ** levels))
-
-
-def reset_trade_level_list_and_get_first(trade_level_list: [TradeLevel]):
-    for trade_level in trade_level_list:
-        trade_level.is_trade = False
-    first_trade_level = trade_level_list[0]
-    first_trade_level.is_trade = True
-    return first_trade_level.amt
-
-
-def get_first_available_trade_amt(trade_level_list: [TradeLevel]):
-    for trade_level in trade_level_list:
-        if not trade_level.is_trade:
-            trade_level.is_trade = True
-            return trade_level.amt
-    return Decimal(0)
-
-
-def reset_available_trade_amt(trade_level_list: [TradeLevel]):
-    for trade_level in trade_level_list:
-        trade_level.is_trade = False
-
-
-def set_trade_level_by_amt(amt: Decimal, trade_level_list: [TradeLevel]):
-    for trade_level in trade_level_list:
-        if not trade_level.is_trade:
-            trade_level.is_trade = True
-            return
-
-
-def trade_if_not_trade_twice(row,
-                             invest_amt,
-                             guarantee_amt,
-                             leverage_ratio,
-                             now_trade_record,
-                             trade_detail, trade_level_list):
+def trade_if_not_trade_twice(now_trade_record, trade_detail):
     if now_trade_record:
         if len(trade_detail.txn_detail_list) > 0:
             last_td = trade_detail.txn_detail_list[len(trade_detail.txn_detail_list) - 1]
             if last_td.trade_record.type == now_trade_record.type and last_td.units != 0:
                 # 上一次是同向交易 => 直接平倉 因為同向交易發生時，大多會虧損
-                reset_available_trade_amt(trade_level_list)
                 return trade_svc.create_close_trade_record(now_trade_record.date,
                                                            now_trade_record.price, last_td,
                                                            reason=TradeReason(
@@ -76,31 +33,25 @@ def trade_if_not_trade_twice(row,
 class MovingAverageStrategy(TradingStrategy):
     invest_amt = 0
     guarantee_amt = 0
-    trade_level_list = []
 
-    def get_trade_record(self, row: pd.Series, trade_detail: TradeDetail) -> TradeRecord:
-        last_td = self.trade_detail.txn_detail_list[len(self.trade_detail.txn_detail_list) - 1] if len(
-            self.trade_detail.txn_detail_list) > 0 else None
+    @property
+    def invest_and_guarantee_ratio(self) -> float:
+        return 0.25
 
-        trade_record = self.trade_if_cross_ma(last_td, row.last_ma7_and_ma25_rel, row)
-        if trade_record:
-            return trade_record
+    @property
+    def lookback_tickets(self) -> int:
+        return 100
 
-        # 3. 獲利時，MA7/MA25連續3期逐漸變小且<100點 => 停利
-        trade_record = self.get_stop_loss_trade_record(last_td, row, self.leverage, trade_detail, self.trade_level_list)
-        if trade_record:
-            return trade_record
+    @property
+    def tickets_interval(self) -> str:
+        return Client.KLINE_INTERVAL_15MINUTE
 
-        # 如果是假突破或假跌破(5K內又跌/漲回去)，把買/賣的賣/買回來
-        trade_record = self.fake_break(row)
-        if trade_record:
-            return trade_record
-
-    def get_trade_record_by_date(self, dt: datetime) -> tuple[None, None] | tuple[TradeRecord, datetime]:
-        data_fetch_start = dt - self.lookback_tickets
+    def get_trade_record_by_date(self, dt: datetime) -> tuple[None, DataFrame] | tuple[TradeRecord, DataFrame]:
+        data_fetch_start = dt - self.get_lookback_timedelta()
 
         # 2. 獲取並準備數據
-        df = self.binance_svc.get_klines(self.product, Client.KLINE_INTERVAL_15MINUTE, data_fetch_start, dt)
+        df = self.binance_svc.get_historical_klines_df(self.product, Client.KLINE_INTERVAL_15MINUTE, data_fetch_start,
+                                                       dt)
 
         if df.iloc[-1].start_time != dt:
             print(
@@ -108,18 +59,39 @@ class MovingAverageStrategy(TradingStrategy):
                 f"price start_time[{type_util.datetime_to_str(df.iloc[-1].start_time, "%Y/%m/%d %H:%M:%S")}]")
             return None, df
 
-        self.prepare_data(self.initial_capital, df, self.other_args)
+        self.prepare_data(df)
 
         # 再篩選一次df，避免拿到多的資料
         df = df[(df["start_time"] <= dt)]
 
-        return self.get_trade_record(df.iloc[-1], self.trade_detail), df
+        current_row = df.iloc[-1]
+        last_td = self.trade_detail.txn_detail_list[len(self.trade_detail.txn_detail_list) - 1] if len(
+            self.trade_detail.txn_detail_list) > 0 else None
 
-    @property
-    def invest_and_guarantee_ratio(self) -> float:
-        return 0.5
+        trade_record = self.trade_if_cross_ma(last_td, current_row)
+        if trade_record:
+            return trade_record, df
 
-    def prepare_data(self, initial_capital: int, df: pd.DataFrame, other_args: dict):
+        # 做多，MA25連續空20期 => 平倉
+        trade_record = self.close_position_if_ma25_back(last_td, current_row)
+        if trade_record:
+            return trade_record, df
+
+        # 3. 獲利時，MA7/MA25連續3期逐漸變小且<100點 => 停利
+        trade_record = self.get_stop_loss_trade_record(last_td, current_row)
+        if trade_record:
+            return trade_record, df
+
+        # 如果是假突破或假跌破(5K內又跌/漲回去)，把買/賣的賣/買回來
+        trade_record = self.fake_break(current_row)
+        if trade_record:
+            return trade_record, df
+
+        return None, df
+
+    def prepare_data(self, df: pd.DataFrame):
+        df.set_index('start_time')
+
         tech_idx_svc.append_ma(df, 7)
         tech_idx_svc.append_ma(df, 6)
         tech_idx_svc.append_ma(df, 25)
@@ -138,16 +110,6 @@ class MovingAverageStrategy(TradingStrategy):
         diff_int = diff_ma25_diff.astype(int)
         past20_ma25_fall = diff_int.rolling(window=20, min_periods=20).min()
         df['past20_ma25_fall'] = past20_ma25_fall.astype(bool)
-
-        # 用投資金額算出投資層數及金額
-        first_layer_invest_amt = calc_first_layer_invest_amt(
-            Decimal(self.invest_amt * self.leverage),
-            self.other_args["level_amt_change"],
-            self.other_args["dca_levels"])
-
-        for i in range(int(self.other_args["dca_levels"])):
-            self.trade_level_list.append(
-                TradeLevel(False, first_layer_invest_amt * pow(self.other_args["level_amt_change"], i)))
 
         # ma7_and_ma25_rel
         diff_sign = np.sign(df['ma7'] - df['ma25'])  # 1, 0, -1
@@ -175,14 +137,30 @@ class MovingAverageStrategy(TradingStrategy):
         df['ma7_and_ma25_rel'] = ma_rel
         df['last_ma7_and_ma25_rel'] = df['ma7_and_ma25_rel'].shift(1)
 
-    @property
-    def lookback_tickets(self) -> timedelta:
-        return timedelta(minutes=15 * 100)
+    def build_chart_dataframe(self, history_dataframe):
+        self.prepare_data(history_dataframe)
+        for txn_detail in self.trade_detail.txn_detail_list:
+            history_dataframe.loc[history_dataframe['start_time'] == txn_detail.date, 'txn_detail'] = txn_detail
+        return history_dataframe
 
-    def trade_if_cross_ma(self, last_td, last_ma7_and_ma25_rel, row):
+    def close_position_if_ma25_back(self, last_td, row):
+        if last_td:
+            if last_td.units > 0 and row.past20_ma25_fall:
+                return trade_svc.create_trade_record(row.start_time, TradeType.SELL, Decimal(row.open),
+                                                     unit=last_td.units, handle_fee_type=HandleFeeType.TAKER,
+                                                     reason=TradeReason(TradeReasonType.ACTIVE,
+                                                                        "做多停利"))
+            elif last_td.units < 0 and row.past20_ma25_growth:
+                return trade_svc.create_trade_record(row.start_time, TradeType.BUY, Decimal(row.open),
+                                                     unit=last_td.units, handle_fee_type=HandleFeeType.TAKER,
+                                                     reason=TradeReason(TradeReasonType.ACTIVE,
+                                                                        "放空停利"))
+        return None
+
+    def trade_if_cross_ma(self, last_td, row):
         # 1. MA7 / MA25 超過20期沒有交叉 > 交叉後確立做多/空方向
-        if abs(last_ma7_and_ma25_rel) >= 20:
-            if last_ma7_and_ma25_rel > 0:
+        if abs(row.last_ma7_and_ma25_rel) >= 20:
+            if row.last_ma7_and_ma25_rel > 0:
                 # ma7在ma25上面持續超過20期
                 if row.ma7 < row.ma25 and not row.past20_ma25_growth:
                     # ma7如果跌破ma25的時候賣
@@ -197,13 +175,7 @@ class MovingAverageStrategy(TradingStrategy):
                     else:
                         handle_unit = Decimal(0)
 
-                    if handle_unit > 0:
-                        # 之前是做多，改放空的時候要reset trade_amt_list後取得第一階trade amt
-                        first_available_trade_amt = reset_trade_level_list_and_get_first(self.trade_level_list)
-                    else:
-                        first_available_trade_amt = Decimal(get_first_available_trade_amt(self.trade_level_list))
-
-                    trade_amt = first_available_trade_amt
+                    trade_amt = Decimal(self.get_single_invest_amt(last_td))
                     acct_handle_unit = handle_unit if handle_unit > 0 else Decimal(0)
                     trade_type = TradeType.SELL
 
@@ -214,13 +186,8 @@ class MovingAverageStrategy(TradingStrategy):
                                                                                         "符合條件"))
 
                     # 6. 連續2次符合條件且方向相同，直接平倉
-                    return trade_if_not_trade_twice(row,
-                                                    self.invest_amt,
-                                                    self.guarantee_amt,
-                                                    self.leverage,
-                                                    now_trade_record,
-                                                    self.trade_detail, self.trade_level_list)
-            elif last_ma7_and_ma25_rel < 0:
+                    return trade_if_not_trade_twice(now_trade_record, self.trade_detail)
+            elif row.last_ma7_and_ma25_rel < 0:
                 if row.ma7 > row.ma25 and not row.past20_ma25_fall:
                     # ma7如果突破ma25的時候買
                     # # 如果之前做多，現在也做多，價差至少要>1000
@@ -235,13 +202,7 @@ class MovingAverageStrategy(TradingStrategy):
                     else:
                         handle_unit = Decimal(0)
 
-                    if handle_unit < 0:
-                        # 之前是做多，改放空的時候要reset trade_amt_list後取得第一階trade amt
-                        first_available_trade_amt = reset_trade_level_list_and_get_first(self.trade_level_list)
-                    else:
-                        first_available_trade_amt = Decimal(get_first_available_trade_amt(self.trade_level_list))
-
-                    trade_amt = first_available_trade_amt
+                    trade_amt = Decimal(self.get_single_invest_amt(last_td))
                     acct_handle_unit = handle_unit if handle_unit < 0 else Decimal(0)
                     trade_type = TradeType.BUY
 
@@ -252,14 +213,9 @@ class MovingAverageStrategy(TradingStrategy):
                                                                                         "符合條件"))
 
                     # 6. 連續2次符合條件且方向相同，直接平倉
-                    return trade_if_not_trade_twice(row,
-                                                    self.invest_amt,
-                                                    self.guarantee_amt,
-                                                    self.leverage,
-                                                    now_trade_record,
-                                                    self.trade_detail, self.trade_level_list)
+                    return trade_if_not_trade_twice(now_trade_record, self.trade_detail)
 
-    def get_stop_loss_trade_record(self, last_td, row, leverage_ratio, trade_detail, trade_level_list):
+    def get_stop_loss_trade_record(self, last_td, row):
         if last_td:
             unrealize_profit = trade_svc.calc_profit(row.close, last_td.handle_amt, last_td.handling_fee, last_td.units)
             if unrealize_profit and unrealize_profit > 0:
@@ -280,14 +236,12 @@ class MovingAverageStrategy(TradingStrategy):
             elif unrealize_profit and unrealize_profit < 0:
                 # 5. 虧損超過1000點 => 停損
                 if last_td.units > 0 and (last_td.handle_amt / last_td.units - Decimal(row.low)) > 1000:
-                    reset_available_trade_amt(trade_level_list)
                     return trade_svc.create_close_trade_record(row.start_time, round(
                         last_td.handle_amt / last_td.units, 2) - 1000, last_td,
                                                                reason=TradeReason(
                                                                    TradeReasonType.PASSIVE,
                                                                    "停損"))
                 if last_td.units < 0 and (Decimal(row.high) + last_td.handle_amt / last_td.units) > 1000:
-                    reset_available_trade_amt(trade_level_list)
                     return trade_svc.create_close_trade_record(row.start_time, round(
                         last_td.handle_amt / last_td.units * -1, 2) + 1000, last_td,
                                                                reason=TradeReason(
@@ -311,8 +265,6 @@ class MovingAverageStrategy(TradingStrategy):
                     self.date_idx_map[row.start_time] - self.date_idx_map[last_1_td.trade_record.date]) < 10) \
                          or (last_1_td.trade_record.type == TradeType.SELL and row.ma7 > row.ma25 and (
                             self.date_idx_map[row.start_time] - self.date_idx_map[last_1_td.trade_record.date]) < 10)):
-                # set trade amt
-                set_trade_level_by_amt(last_2_td.handle_amt, self.trade_level_list)
                 # build trade record
                 trade_type = TradeType.BUY if last_1_td.trade_record.type == TradeType.SELL else TradeType.SELL
                 touch_ma_trade_record = trade_svc.create_trade_record(row.start_time, trade_type,
