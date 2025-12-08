@@ -34,9 +34,9 @@ class TradingStrategy(ABC):
 
     def get_single_invest_amt(self, last_td):
         if last_td:
-            return min(self.invest_amt, int(last_td.acct_balance))
+            return min(self.invest_amt, int(last_td.acct_balance)) * self.leverage
         else:
-            return self.invest_amt
+            return self.invest_amt * self.leverage
 
     def get_lookback_timedelta(self) -> timedelta:
         if self.tickets_interval.endswith("m"):

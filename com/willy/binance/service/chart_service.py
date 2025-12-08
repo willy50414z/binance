@@ -107,7 +107,7 @@ def export_trade_point_chart(chart_name, df, ma_dca_backtest_req):
     df2['reason'] = txn_detail_df['txn_detail'].apply(lambda d: d.trade_record.reason.desc)
     table_html = df2.to_html(index=False, border=1)
 
-    strategy_summary_df = trade_svc.analyze_trading_strategy(df2, 10000)
+    strategy_summary_df = trade_svc.analyze_trading_strategy(df2, ma_dca_backtest_req["initial_capital"])
     strategy_summary_html = strategy_summary_df.to_html(index=False, border=1)
     # strategy_summary_html = ""
 
