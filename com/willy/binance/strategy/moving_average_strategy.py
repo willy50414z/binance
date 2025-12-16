@@ -72,10 +72,10 @@ class MovingAverageStrategy(TradingStrategy):
         if trade_record:
             return trade_record, df
 
-        # 做多，MA25連續空20期 => 平倉
-        trade_record = self.close_position_if_ma25_back(last_td, current_row)
-        if trade_record:
-            return trade_record, df
+        # # 做多，MA25連續空20期 => 平倉
+        # trade_record = self.close_position_if_ma25_back(last_td, current_row)
+        # if trade_record:
+        #     return trade_record, df
 
         # 3. 獲利時，MA7/MA25連續3期逐漸變小且<100點 => 停利
         trade_record = self.get_stop_loss_trade_record(last_td, current_row)

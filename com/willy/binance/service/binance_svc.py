@@ -36,7 +36,7 @@ class BinanceSvc:
 
     def __init__(self, api_user: ApiUser = ApiUser.HEDGE_BUY, is_demo: bool = True, is_testnet: bool = True):
         self.config = config_util("binance.acct." + api_user.acct_name)
-        self.client = Client(self.config.get("apikey"), self.config.get("privatekey"), demo=is_demo, testnet=is_testnet)
+        self.client = None  # Client(self.config.get("apikey"), self.config.get("privatekey"), demo=is_demo, testnet=is_testnet)
 
     def get_historical_klines(self, binance_product: BinanceProduct, kline_interval=Client.KLINE_INTERVAL_1DAY,
                               start_date: datetime = type_util.str_to_date("20250101"),

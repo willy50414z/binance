@@ -32,7 +32,7 @@ def export_trade_point_chart(chart_name, df, ma_dca_backtest_req):
                     buy_point_list.append((row.start_time.strftime('%Y-%m-%d %H:%M:%S'), row.close, "BUY"))
                 else:
                     sell_point_list.append((row.start_time.strftime('%Y-%m-%d %H:%M:%S'), row.close, "SEll"))
-            total_profit_list.append(row.txn_detail.total_profit)
+            total_profit_list.append(round(row.txn_detail.total_profit / ma_dca_backtest_req["initial_capital"], 2) + 1)
         else:
             if len(total_profit_list) > 0:
                 total_profit_list.append(total_profit_list[len(total_profit_list) - 1])
