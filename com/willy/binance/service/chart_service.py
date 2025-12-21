@@ -1,43 +1,60 @@
-from decimal import Decimal
-
 import pandas as pd
-from pandas import DataFrame
 from pyecharts import options as opts
 from pyecharts.charts import Line
 
-from com.willy.binance.enums.trade_type import TradeType
 from com.willy.binance.service import trade_svc
 
 
-def export_trade_point_chart(chart_name, df, ma_dca_backtest_req):
-    # df = pd.read_csv('E:/code/binance/data/BTCUSDT_15m.csv')
+def get_mark_points(analysis_df):
+    """從 analysis_df 提取交易標註點"""
+    mark_points = []
+    txn_rows = analysis_df[analysis_df['trade_type'].notna()]
+    for timestamp, row in txn_rows.iterrows():
+        label = f"{row['trade_type']}\n{row['trade_reason']}"
+        color = "#000000"
+        if "停損" in str(row['trade_reason']):
+            color = "#00A2E8"
+        elif row['trade_type'] == 'BUY':
+            color = "#2EBD85"
+        elif row['trade_type'] == 'SELL':
+            color = "#F6465D"
+        mark_points.append(opts.MarkPointItem(
+            name=label,
+            coord=[timestamp.strftime('%Y-%m-%d %H:%M:%S'), float(row['close'])],
+            itemstyle_opts=opts.ItemStyleOpts(color=color)
+        ))
+    return mark_points
 
-    # 提取数据中的日期和收盘价
-    date_list = df['start_time'].dt.strftime('%Y-%m-%d %H:%M:%S').tolist()
-    # date_list = [(dt + relativedelta(**{"hours": 8})).strftime('%Y-%m-%d %H:%M:%S') for dt in date_list]
-    close_list = df['close'].values.tolist()
-    ma7_list = df["ma7"].values.tolist()
-    ma25_list = df["ma25"].values.tolist()
 
-    buy_point_list = []
-    sell_point_list = []
-    stop_loss_point_list = []
-    total_profit_list = []
-    for row in df.itertuples(index=False):
-        if not pd.isna(row.txn_detail):
-            if row.txn_detail.trade_record.reason.desc == "停損":
-                stop_loss_point_list.append((row.start_time.strftime('%Y-%m-%d %H:%M:%S'), row.close, "STOP_LOSS"))
-            else:
-                if row.txn_detail.trade_record.type == TradeType.BUY:
-                    buy_point_list.append((row.start_time.strftime('%Y-%m-%d %H:%M:%S'), row.close, "BUY"))
-                else:
-                    sell_point_list.append((row.start_time.strftime('%Y-%m-%d %H:%M:%S'), row.close, "SEll"))
-            total_profit_list.append(round(row.txn_detail.total_profit / ma_dca_backtest_req["initial_capital"], 2) + 1)
-        else:
-            if len(total_profit_list) > 0:
-                total_profit_list.append(total_profit_list[len(total_profit_list) - 1])
-            else:
-                total_profit_list.append(Decimal(0))
+def export_trade_point_chart(chart_name, analysis_df, ma_dca_backtest_req):
+    """
+        使用 analysis_df 繪製交易點位圖
+        analysis_df 預期包含: start_time (index), close, ma7, ma25, trade_type, trade_reason, profit
+        """
+    # 1. 準備基礎座標軸資料
+    # 將 index (start_time) 轉為字串格式供圖表顯示
+    date_list = analysis_df.index.strftime('%Y-%m-%d %H:%M:%S').tolist()
+    close_list = analysis_df['close'].tolist()
+    ma7_list = analysis_df['ma7'].tolist()
+    ma25_list = analysis_df['ma25'].tolist()
+
+    # 遍歷 DataFrame 找出有交易紀錄的行
+    # 我們利用 'trade_type' 欄位是否為 NaN 來判斷
+    txn_rows = analysis_df[analysis_df['trade_type'].notna()]
+    profit_series = (
+        pd.to_numeric(analysis_df['total_profit'], errors='coerce')  # 強制轉為數值，非數值變 NaN
+        .ffill()  # 向前填充
+        .fillna(0)  # 剩下的填 0
+        .tolist()
+    )
+
+    for timestamp, row in txn_rows.iterrows():
+        time_str = timestamp.strftime('%Y-%m-%d %H:%M:%S')
+        price = float(row['close'])
+        label = f"{row['trade_type']}\n{row['trade_reason']}"
+
+        # 根據交易類型或理由分類標籤
+        point_item = opts.MarkPointItem(name=label, coord=[time_str, price], value=row['trade_type'])
 
     line_chart = Line()
     line_chart.add_xaxis(xaxis_data=date_list)
@@ -47,21 +64,12 @@ def export_trade_point_chart(chart_name, df, ma_dca_backtest_req):
                          y_axis=ma7_list, color='#F19C38', yaxis_index=0)
     line_chart.add_yaxis(series_name="ma25", is_symbol_show=False,
                          y_axis=ma25_list, color='#EA3DF7', yaxis_index=0)
-    line_chart.add_yaxis(series_name="total_profit", is_symbol_show=False,
-                         y_axis=total_profit_list, color='#138535', yaxis_index=1)
+    line_chart.add_yaxis(series_name="accu_profit", is_symbol_show=False,
+                         y_axis=profit_series, color='#138535', yaxis_index=1)
     line_chart.extend_axis(yaxis=opts.AxisOpts(type_="value", position="right"))
     line_chart.set_series_opts(
         markpoint_opts=opts.MarkPointOpts(
-            data=[opts.MarkPointItem(name=f"{p[0]} {p[1]}", itemstyle_opts={"color": "#2EBD85"}, coord=[p[0], p[1]]) for
-                  p in
-                  buy_point_list]
-                 + [opts.MarkPointItem(name=f"{p[0]} {p[1]}", itemstyle_opts={"color": "#F6465D"}, coord=[p[0], p[1]])
-                    for p in
-                    sell_point_list] + [
-                     opts.MarkPointItem(name=f"{p[0]} {p[1]}", itemstyle_opts={"color": "#00A2E8"}, coord=[p[0], p[1]])
-                     for p in
-                     stop_loss_point_list]
-
+            data=get_mark_points(analysis_df),  # 提取買賣點的輔助函式
         ))
 
     line_chart.set_global_opts(
@@ -97,17 +105,36 @@ def export_trade_point_chart(chart_name, df, ma_dca_backtest_req):
     chart_html = line_chart.render_embed()
 
     # Convert DataFrame to HTML table
-    txn_detail_df = df[df['txn_detail'].notna()][["start_time", "txn_detail"]]
-    df2 = DataFrame()
-    df2['date'] = txn_detail_df['txn_detail'].apply(lambda d: d.trade_record.date.strftime('%Y%m%d %H:%M:%S'))
-    df2['units'] = txn_detail_df['txn_detail'].apply(lambda d: d.units)
-    df2['price'] = txn_detail_df['txn_detail'].apply(lambda d: round(d.trade_record.price, 2))
-    df2['profit'] = txn_detail_df['txn_detail'].apply(lambda d: d.profit)
-    df2['total_profit'] = txn_detail_df['txn_detail'].apply(lambda d: d.total_profit)
-    df2['reason'] = txn_detail_df['txn_detail'].apply(lambda d: d.trade_record.reason.desc)
-    table_html = df2.to_html(index=False, border=1)
+    # 1. 篩選出有交易的行
+    txn_rows = analysis_df[analysis_df['trade_type'].notna()].copy()
 
-    strategy_summary_df = trade_svc.analyze_trading_strategy(df2, ma_dca_backtest_req["initial_capital"])
+    # 2. 格式化輸出表格用的 DataFrame
+    # 我們只需要取出我們要展示的欄位，並做簡單格式化
+    if len(txn_rows) > 0:
+        output_df = pd.DataFrame({
+            'date': txn_rows.index.strftime('%Y-%m-%d %H:%M:%S'),
+            'type': txn_rows['trade_type'].values,  # 使用 .values 轉為純陣列，避開索引對齊
+            'units': txn_rows['units'].values,
+            'price': txn_rows['trade_price'].round(2).values,
+            'profit': txn_rows['profit'].round(2).values,
+            'total_profit': txn_rows['total_profit'].round(2).values,
+            'acct_balance': txn_rows['acct_balance'].round(2).values,
+            'reason': txn_rows['trade_reason'].values
+        })
+    else:
+        output_df = pd.DataFrame(columns=[
+            'date',
+            'type',
+            'units',
+            'price',
+            'profit',
+            'total_profit',
+            'acct_balance',
+            'reason'
+        ])
+    table_html = output_df.to_html(index=False, border=1)
+
+    strategy_summary_df = trade_svc.analyze_trading_strategy(output_df, ma_dca_backtest_req["initial_capital"])
     strategy_summary_html = strategy_summary_df.to_html(index=False, border=1)
     # strategy_summary_html = ""
 
@@ -250,71 +277,6 @@ def export_trade_point_chart(chart_name, df, ma_dca_backtest_req):
     with open(f"E:/code/binance/charts/{chart_name}.html", "w", encoding="utf-8") as f:
         f.write(final_html)
 
-    # line_chart2 = Line()
-    # line_chart2.add_xaxis(xaxis_data=date_list)
-    # line_chart2.add_yaxis(series_name="total_profit", is_symbol_show=False,
-    #                       y_axis=total_profit_list, color='#000000')
-    #
-    # line_chart2.set_global_opts(
-    #     title_opts=opts.TitleOpts(title="total_profit data"),
-    #     xaxis_opts=opts.AxisOpts(type_="category"),
-    #     yaxis_opts=opts.AxisOpts(is_scale=True),
-    #     datazoom_opts=[
-    #         opts.DataZoomOpts(
-    #             pos_bottom="-2%",
-    #             range_start=0,
-    #             range_end=100,
-    #             type_="inside"
-    #         ),
-    #         opts.DataZoomOpts(
-    #             pos_bottom="-2%",
-    #             range_start=0,
-    #             range_end=100,
-    #             type_="slider",
-    #         ),
-    #     ],
-    #     toolbox_opts=opts.ToolboxOpts(
-    #         feature={
-    #             "dataZoom": {"yAxisIndex": "none"},
-    #             "restore": {},
-    #             "saveAsImage": {},
-    #         }
-    #     ),
-    # )
 
-    # grid = Grid()
-    # grid.add(line_chart, grid_opts=opts.GridOpts(pos_left="5%", pos_right="55%", height="400px"))
-    # grid.add(line_chart2, grid_opts=opts.GridOpts(pos_left="60%", pos_right="5%", height="400px"))
-    #
-    # # grid.set_global_opts(
-    # #     title_opts=opts.TitleOpts(title="Two charts with shared X-axis"),
-    # # )
-    #
-    # grid.render("two_charts_nested_grid.html")
-
-
-#     line = (
-#         Line()
-#         .add_xaxis(date_list)
-#         .add_yaxis("close", y_axis=close_list, symbol="emptyCircle", is_symbol_show=True)
-#         # .add_yaxis("ma7", ma7_list, symbol="emptyCircle", is_symbol_show=True, color="#3470C6")
-#         # .add_yaxis("ma25", ma25_list, symbol="emptyCircle", is_symbol_show=True, color="#5470C6")
-#         # .set_series_opts(
-#         #     markpoint_opts=opts.MarkPointOpts(
-#         #         data=[opts.MarkPointItem(name="BUY", coord=[p[0], p[1]]) for p in buy_point_list] +
-#         #              [opts.MarkPointItem(name="SELL", coord=[p[0], p[1]]) for p in sell_point_list]  # 依需求調整
-#         #     )
-#         #     # TODO color
-#         # )
-#         .set_global_opts(
-#             title_opts=opts.TitleOpts(title="多折線 + 自訂標註點" if chart_name is None else chart_name),
-#             xaxis_opts=opts.AxisOpts(type_="date"),
-#             yaxis_opts=opts.AxisOpts(name="price")
-#         )
-#     )
-#
-#     line.render(f"E:/code/binance/charts/{chart_name}.html")
-#
-#
 if __name__ == '__main__':
     export_trade_point_chart("xxx", None)

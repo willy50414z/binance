@@ -36,7 +36,8 @@ class BinanceSvc:
 
     def __init__(self, api_user: ApiUser = ApiUser.HEDGE_BUY, is_demo: bool = True, is_testnet: bool = True):
         self.config = config_util("binance.acct." + api_user.acct_name)
-        self.client = None  # Client(self.config.get("apikey"), self.config.get("privatekey"), demo=is_demo, testnet=is_testnet)
+        self.client = None
+        self.client = Client(self.config.get("apikey"), self.config.get("privatekey"), demo=is_demo, testnet=is_testnet)
 
     def get_historical_klines(self, binance_product: BinanceProduct, kline_interval=Client.KLINE_INTERVAL_1DAY,
                               start_date: datetime = type_util.str_to_date("20250101"),
@@ -68,24 +69,52 @@ class BinanceSvc:
     def get_historical_klines_df(self, binance_product: BinanceProduct, kline_interval=Client.KLINE_INTERVAL_1DAY,
                                  start_time: datetime = type_util.str_to_date("20250101"),
                                  end_time: datetime = type_util.str_to_date("20250105")) -> DataFrame:
+        # 先從檔案讀取，避免頻繁呼叫API
+        cached_df = self.get_price_from_cached_file(binance_product, kline_interval)
 
-        df = self.get_price_from_cached_file(binance_product, kline_interval)
-        if df is not None and df.iloc[0]['start_time'] <= start_time and df.iloc[-1]['start_time'] >= end_time:
-            # df = df.apply(parse_datetime_row, axis=1)
-            mask = (df["start_time"] >= start_time) & (df["start_time"] <= end_time)
-            return df.loc[mask].copy()
+        # 需要的資料在檔案中，直接撈
+        if cached_df is not None and cached_df.index[0] <= start_time and cached_df.index[-1] >= end_time:
+            return cached_df.loc[start_time:end_time].copy()
         else:
+            query_start_time = start_time
+            query_end_time = end_time
+            if cached_df is not None:
+                if cached_df.index[0] > start_time:
+                    query_end_time = cached_df.index[0]
+                elif cached_df.index[-1] < end_time:
+                    query_start_time = cached_df.index[-1]
+
+            # 需要的資料不在檔案中，call API撈
             klines = self.client.get_historical_klines(binance_product.name, kline_interval,
-                                                       int(start_time.timestamp() * 1000),
-                                                       int(end_time.timestamp() * 1000))
+                                                       int(query_start_time.timestamp() * 1000),
+                                                       int(query_end_time.timestamp() * 1000))
             selected_fields = [[row[i] for i in (0, 1, 2, 3, 4, 5, 6, 8)] for row in klines]
-            df = pd.DataFrame(selected_fields,
-                              columns=['start_time', 'open', 'high', 'low', 'close', 'vol', 'end_time',
-                                       'number_of_trade'])
-            df = df.apply(parse_datetime_row, axis=1)
-            df = df.astype(
+            new_data_df = pd.DataFrame(selected_fields,
+                                       columns=['start_time', 'open', 'high', 'low', 'close', 'vol', 'end_time',
+                                                'number_of_trade'])
+            new_data_df = new_data_df.apply(parse_datetime_row, axis=1)
+            new_data_df = new_data_df.astype(
                 {'open': float, 'high': float, 'low': float, 'close': float, 'vol': float, 'number_of_trade': float})
-        return df
+            new_data_df = new_data_df.set_index('start_time', drop=False).sort_index()
+
+            # merge dataframes
+            if cached_df is not None:
+                # 合併舊資料與新資料
+                updated_df = pd.concat([cached_df, new_data_df])
+                # 根據 index (start_time) 去重，保留最新抓到的資料 (以防萬一 API 修正過歷史數據)
+                updated_df = updated_df[~updated_df.index.duplicated(keep='last')].sort_index()
+            else:
+                updated_df = new_data_df
+
+            # export
+            data_dir = Path(__file__).parent.parent.parent.parent.parent / "data"
+            csv_path = data_dir / f"{binance_product.name}_{kline_interval}.csv"
+            updated_df.to_csv(csv_path, index=False)
+
+            # clear cache
+            self.get_price_from_cached_file.cache_clear()
+
+            return updated_df.loc[start_time:end_time].copy()
 
     @functools.lru_cache(maxsize=10)
     def get_price_from_cached_file(self, binance_product: BinanceProduct, kline_interval):
@@ -95,6 +124,7 @@ class BinanceSvc:
         df = None
         if Path(csv_path).exists():
             df = pd.read_csv(csv_path, parse_dates=["start_time", "end_time"])
+            df = df.set_index('start_time', drop=False).sort_index()
         return df
 
     def get_close_ma(self, binance_product: BinanceProduct, kline_interval=Client.KLINE_INTERVAL_1DAY,

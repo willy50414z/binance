@@ -204,7 +204,7 @@ def build_txn_detail_list(binanceKline: BinanceKline, invest_amt: Decimal, guara
                         DECIMAL_PLACE_2, rounding=ROUND_CEILING)
 
             guarantee = (total_handle_amt / leverage_ratio).quantize(DECIMAL_PLACE_2, rounding=ROUND_CEILING)
-            acct_balance = invest_amt + guarantee_amt - guarantee - total_handle_fee
+            acct_balance = invest_amt + guarantee_amt + (last_total_profit + profit)
             max_loss = calc_max_loss(binanceKline.high, binanceKline.low, total_handle_amt, total_handle_fee,
                                      total_handle_units,
                                      HandleFeeType.TAKER)
@@ -260,7 +260,7 @@ def build_txn_detail_list(binanceKline: BinanceKline, invest_amt: Decimal, guara
                         DECIMAL_PLACE_2, rounding=ROUND_CEILING)
 
             guarantee = (total_handle_amt / leverage_ratio).quantize(DECIMAL_PLACE_2, rounding=ROUND_CEILING)
-            acct_balance = invest_amt + guarantee_amt - guarantee - total_handle_fee
+            acct_balance = invest_amt + guarantee_amt + (last_total_profit + profit)
             max_loss = calc_max_loss(binanceKline.high, binanceKline.low, total_handle_amt, total_handle_fee,
                                      total_handle_units,
                                      HandleFeeType.TAKER)
@@ -322,46 +322,46 @@ def check_is_force_close_offset(kline: BinanceKline, invest_amt: Decimal, guaran
         return True
 
 
-if __name__ == '__main__':
-    tr1 = TradeRecord(datetime.now(), TradeType.BUY, Decimal(10000), Decimal(100), HandleFeeType.MAKER)
-    tr2 = TradeRecord(datetime.now(), TradeType.BUY, Decimal(11000), Decimal(100), HandleFeeType.MAKER)
-    tr3 = TradeRecord(datetime.now(), TradeType.SELL, Decimal(12000), Decimal(150), HandleFeeType.MAKER)
-    tr4 = TradeRecord(datetime.now(), TradeType.SELL, Decimal(15000), Decimal(100), HandleFeeType.MAKER)
-    tr5 = TradeRecord(datetime.now(), TradeType.BUY, Decimal(16000), Decimal(20), HandleFeeType.MAKER)
-    tr6 = TradeRecord(datetime.now(), TradeType.BUY, Decimal(18000), Decimal(100), HandleFeeType.MAKER)
-
-    trade_detail = TradeDetail(False, False, [])
-    build_txn_detail_list(
-        BinanceKline(datetime.now(), Decimal(100), Decimal(100), Decimal(100), Decimal(100), Decimal(100),
-                     datetime.now(), 100), Decimal(1000), Decimal(4000), Decimal(100), tr1, trade_detail)
-    build_txn_detail_list(
-        BinanceKline(datetime.now(), Decimal(100), Decimal(100), Decimal(100), Decimal(100), Decimal(100),
-                     datetime.now(), 100), Decimal(1000), Decimal(4000), Decimal(100), tr2, trade_detail)
-
-    build_txn_detail_list(
-        BinanceKline(datetime.now(), Decimal(100), Decimal(100), Decimal(100), Decimal(100), Decimal(100),
-                     datetime.now(), 100), Decimal(1000), Decimal(4000), Decimal(100), None, trade_detail)
-
-    build_txn_detail_list(
-        BinanceKline(datetime.now(), Decimal(100), Decimal(100), Decimal(100), Decimal(100), Decimal(100),
-                     datetime.now(), 100), Decimal(1000), Decimal(4000), Decimal(100), tr3, trade_detail)
-    build_txn_detail_list(
-        BinanceKline(datetime.now(), Decimal(100), Decimal(100), Decimal(100), Decimal(100), Decimal(100),
-                     datetime.now(), 100), Decimal(1000), Decimal(4000), Decimal(100), tr4, trade_detail)
-
-    build_txn_detail_list(
-        BinanceKline(datetime.now(), Decimal(100), Decimal(100), Decimal(100), Decimal(100), Decimal(100),
-                     datetime.now(), 100), Decimal(1000), Decimal(4000), Decimal(100), None, trade_detail)
-
-    build_txn_detail_list(
-        BinanceKline(datetime.now(), Decimal(100), Decimal(100), Decimal(100), Decimal(100), Decimal(100),
-                     datetime.now(), 100), Decimal(1000), Decimal(4000), Decimal(100), tr5, trade_detail)
-
-    build_txn_detail_list(
-        BinanceKline(datetime.now(), Decimal(100), Decimal(100), Decimal(100), Decimal(100), Decimal(100),
-                     datetime.now(), 100), Decimal(1000), Decimal(4000), Decimal(100), tr6, trade_detail)
-
-    print(trade_detail.txn_detail_list)
+# if __name__ == '__main__':
+#     tr1 = TradeRecord(datetime.now(), TradeType.BUY, Decimal(10000), Decimal(100), HandleFeeType.MAKER)
+#     tr2 = TradeRecord(datetime.now(), TradeType.BUY, Decimal(11000), Decimal(100), HandleFeeType.MAKER)
+#     tr3 = TradeRecord(datetime.now(), TradeType.SELL, Decimal(12000), Decimal(150), HandleFeeType.MAKER)
+#     tr4 = TradeRecord(datetime.now(), TradeType.SELL, Decimal(15000), Decimal(100), HandleFeeType.MAKER)
+#     tr5 = TradeRecord(datetime.now(), TradeType.BUY, Decimal(16000), Decimal(20), HandleFeeType.MAKER)
+#     tr6 = TradeRecord(datetime.now(), TradeType.BUY, Decimal(18000), Decimal(100), HandleFeeType.MAKER)
+#
+#     trade_detail = TradeDetail(False, False, [])
+#     build_txn_detail_list(
+#         BinanceKline(datetime.now(), Decimal(100), Decimal(100), Decimal(100), Decimal(100), Decimal(100),
+#                      datetime.now(), 100), Decimal(1000), Decimal(4000), Decimal(100), tr1, trade_detail)
+#     build_txn_detail_list(
+#         BinanceKline(datetime.now(), Decimal(100), Decimal(100), Decimal(100), Decimal(100), Decimal(100),
+#                      datetime.now(), 100), Decimal(1000), Decimal(4000), Decimal(100), tr2, trade_detail)
+#
+#     build_txn_detail_list(
+#         BinanceKline(datetime.now(), Decimal(100), Decimal(100), Decimal(100), Decimal(100), Decimal(100),
+#                      datetime.now(), 100), Decimal(1000), Decimal(4000), Decimal(100), None, trade_detail)
+#
+#     build_txn_detail_list(
+#         BinanceKline(datetime.now(), Decimal(100), Decimal(100), Decimal(100), Decimal(100), Decimal(100),
+#                      datetime.now(), 100), Decimal(1000), Decimal(4000), Decimal(100), tr3, trade_detail)
+#     build_txn_detail_list(
+#         BinanceKline(datetime.now(), Decimal(100), Decimal(100), Decimal(100), Decimal(100), Decimal(100),
+#                      datetime.now(), 100), Decimal(1000), Decimal(4000), Decimal(100), tr4, trade_detail)
+#
+#     build_txn_detail_list(
+#         BinanceKline(datetime.now(), Decimal(100), Decimal(100), Decimal(100), Decimal(100), Decimal(100),
+#                      datetime.now(), 100), Decimal(1000), Decimal(4000), Decimal(100), None, trade_detail)
+#
+#     build_txn_detail_list(
+#         BinanceKline(datetime.now(), Decimal(100), Decimal(100), Decimal(100), Decimal(100), Decimal(100),
+#                      datetime.now(), 100), Decimal(1000), Decimal(4000), Decimal(100), tr5, trade_detail)
+#
+#     build_txn_detail_list(
+#         BinanceKline(datetime.now(), Decimal(100), Decimal(100), Decimal(100), Decimal(100), Decimal(100),
+#                      datetime.now(), 100), Decimal(1000), Decimal(4000), Decimal(100), tr6, trade_detail)
+#
+#     print(trade_detail.txn_detail_list)
 
 
 def analyze_trading_strategy(df: pd.DataFrame, initial_capital: float, risk_free_rate: float = 0.02) -> pd.DataFrame:
@@ -397,14 +397,37 @@ def analyze_trading_strategy(df: pd.DataFrame, initial_capital: float, risk_free
 
     # 計算每日或每次操作的報酬率
     # 這裡使用淨值的變化率作為報酬率
-    df['returns'] = df['equity'].pct_change().fillna(0)
+    df['returns'] = df['equity'].ffill().pct_change().fillna(0)
 
     # --- 2. 報酬指標 (Return Metrics) ---
-    final_equity = df['equity'].iloc[-1]
-    total_return = (final_equity / initial_capital) - 1
+    # 1. 安全取得最終淨值
+    final_equity = float(df['equity'].iloc[-1]) if not df.empty else initial_capital
 
-    # 年化報酬率 (Compound Annual Growth Rate, CAGR)
-    cagr = ((float(final_equity) / float(initial_capital)) ** (1 / years)) - 1 if years > 0 else 0
+    # 計算總報酬率
+    total_return = (final_equity - initial_capital) / initial_capital
+
+    # 2. 計算回測天數與年化係數 (針對 15分鐘線)
+    # 取得資料筆數
+    num_bars = len(df)
+    # 15分鐘線一年的總量 (365天 * 24小時 * 4)
+    bars_per_year = 35040
+    years = num_bars / bars_per_year
+
+    # 3. 計算 CAGR (加入保護機制)
+    if years > 0 and final_equity > 0:
+        # 使用實數計算，避免產生複數
+        cagr = (pow(final_equity / initial_capital, 1 / years) - 1)
+    else:
+        # 如果虧損到 0 以下，CAGR 定義為 -100%
+        cagr = -1.0 if final_equity <= 0 else 0.0
+
+    # 4. 計算波動度 (Volatility) - 需與 15M 頻率對齊
+    # 假設 df['return'] 是每 15 分鐘的報酬率
+    log_return = np.log(df['equity'] / df['equity'].shift(1))
+    volatility = log_return.std() * np.sqrt(bars_per_year)
+
+    # 5. 計算夏普比率 (假設無風險利率 0)
+    sharpe_ratio = (cagr / volatility) if volatility != 0 else 0
 
     # 獲利因子 (Profit Factor)
     winning_trades = df[df['profit'] > 0]['profit'].sum()
@@ -422,10 +445,6 @@ def analyze_trading_strategy(df: pd.DataFrame, initial_capital: float, risk_free
     # 這裡使用操作報酬率的標準差，並年化 (假設每天一次操作，如果頻率不同需調整)
     # 更標準的做法是使用日頻率的報酬，但這裡我們根據現有數據計算
     annual_volatility = df['returns'].astype(float).std() * np.sqrt(252)  # 假設一年252個交易日
-
-    # 夏普比率 (Sharpe Ratio)
-    # 假設使用 CAGR 作為策略報酬率
-    sharpe_ratio = (cagr - risk_free_rate) / annual_volatility if annual_volatility != 0 else np.inf
 
     # --- 4. 交易特性指標 (Trade Metrics) ---
 

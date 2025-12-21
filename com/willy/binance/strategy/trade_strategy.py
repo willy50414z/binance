@@ -1,3 +1,4 @@
+import logging
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -28,7 +29,7 @@ class TradingStrategy(ABC):
         self.other_args = other_args
         self.invest_amt = round(float(self.invest_and_guarantee_ratio * initial_capital), 2)
         self.guarantee_amt = initial_capital - self.invest_amt
-        self.binance_svc = BinanceSvc()
+        self.binance_svc = BinanceSvc(is_demo=False, is_testnet=False)
         self.trade_detail = TradeDetail(False, False, [])
         self.date_idx_map = {}
 
@@ -87,20 +88,39 @@ class TradingStrategy(ABC):
     def build_chart_dataframe(self, history_dataframe):
         pass
 
-    # @abstractmethod
-    # def get_trade_record(self, row: pd.Series, trade_detail: TradeDetail) -> TradeRecord:
-    #     """
-    #     [強制實現] 根據當前數據和持倉，決定當日的交易量和原因。
-    #
-    #     Args:
-    #         trade_detail:
-    #         row: 當前日期的數據 (包含指標)。
-    #
-    #     Returns:
-    #         tuple: (units_change, reason)
-    #                units_change > 0 買入, units_change < 0 賣出, units_change = 0 不操作
-    #     """
-    #     pass
+    def build_analysis_df(self, history_df):
+        # 1. 將 txn_detail_list 轉成 DataFrame
+        txn_data = []
+        self.prepare_data(history_df)
+        for td in self.trade_detail.txn_detail_list:
+            txn_data.append({
+                'start_time': td.date,
+                'units': float(td.units),
+                'current_price': float(td.current_price),
+                'profit': float(td.profit),
+                'profit_ratio': float(td.profit_ratio),
+                'total_profit': float(td.total_profit),
+                'acct_balance': float(td.acct_balance),
+                'trade_type': td.trade_record.type.name,
+                'trade_price': float(td.trade_record.price),
+                'trade_reason': td.trade_record.reason.desc
+            })
+
+        if not txn_data:
+            txn_df = pd.DataFrame(columns=[
+                'start_time', 'units', 'current_price', 'profit',
+                'profit_ratio', 'total_profit', 'acct_balance',
+                'trade_type', 'trade_price', 'trade_reason'
+            ])
+        else:
+            txn_df = pd.DataFrame(txn_data)
+
+        if not txn_df.empty:
+            txn_df.set_index('start_time', inplace=True)
+
+        # 2. 與原始 history_df 合併 (history_df 包含了 MA, RSI, ADX 等指標)
+        # 使用 left join，確保每一根 K 線都有資料，沒交易的地方會是 NaN
+        return history_df.join(txn_df, how='left', rsuffix='_txn')
 
     def check_break_position(self, row):
         # 確認有沒有爆倉
@@ -130,26 +150,36 @@ class TradingStrategy(ABC):
         row_idx = 0
         # 逐日回測
         for start_time in backtest_start_time_list:
+            # 帳戶餘額已歸零須停止回測
+            if len(self.trade_detail.txn_detail_list) > 0:
+                last_balance = self.trade_detail.txn_detail_list[-1].acct_balance
+                if last_balance <= 0:
+                    logging.info(f"[{start_time}] 帳戶餘額已歸零 ({last_balance})，終止回測。")
+                    break
+
             # 準備共用參數
             self.date_idx_map[start_time] = row_idx
             row_idx += 1
+
             if row_idx % 1000 == 0:
                 print(f"finish {row_idx} / {backtest_start_time_list.shape[0]}")
+
+            # 確認有沒有爆倉
+            self.check_break_position(history_dataframe.loc[start_time])
 
             # 決策是否交易
             trade_record, df = self.get_trade_record_by_date(start_time)
 
             # 紀錄交易紀錄
-            trade_svc.build_txn_detail_list_df(df.iloc[-1], self.invest_amt, self.guarantee_amt, self.leverage,
+            trade_svc.build_txn_detail_list_df(history_dataframe.loc[start_time], self.invest_amt, self.guarantee_amt,
+                                               self.leverage,
                                                trade_record,
                                                self.trade_detail)
 
-            # 確認有沒有爆倉
-            self.check_break_position(df.iloc[-1])
-
         # 製圖
+        analysis_df = self.build_analysis_df(history_dataframe)
         chart_dataframe = self.build_chart_dataframe(history_dataframe)
-        chart_service.export_trade_point_chart(self.test_name, chart_dataframe, {
+        chart_service.export_trade_point_chart(self.test_name, analysis_df, {
             "start_time": type_util.datetime_to_str(self.start_time, "%Y-%m-%d %H:%M:%S")
             , "end_time": type_util.datetime_to_str(self.end_time, "%Y-%m-%d %H:%M:%S")
             , "initial_capital": self.initial_capital
