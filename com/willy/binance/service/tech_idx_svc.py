@@ -3,8 +3,68 @@ import pandas as pd
 
 
 def append_ma(kline_df: pd.DataFrame, interval: int):
-    kline_df['ma' + str(interval)] = kline_df['close'].rolling(window=interval, min_periods=interval).mean().round(
-        2)
+    kline_df['ma' + str(interval)] = kline_df['close'].rolling(window=interval, min_periods=interval).mean().round(2)
+
+
+def append_rsi(kline_df: pd.DataFrame, windows: int):
+    """相對強弱指數 (RSI) - 使用 Wilder's Smoothing"""
+    delta = kline_df['close'].diff()
+    gain = (delta.where(delta > 0, 0))
+    loss = (-delta.where(delta < 0, 0))
+
+    # 使用 Wilder's Exponential Moving Average (與 TradingView 一致)
+    avg_gain = gain.ewm(alpha=1 / windows, min_periods=windows, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1 / windows, min_periods=windows, adjust=False).mean()
+
+    rs = avg_gain / avg_loss
+    kline_df['rsi' + str(windows)] = (100 - (100 / (1 + rs))).round(2)
+
+
+def append_atr(kline_df: pd.DataFrame, windows: int):
+    """平均真實波幅 (ATR)"""
+    high = kline_df['high']
+    low = kline_df['low']
+    prev_close = kline_df['close'].shift(1)
+
+    tr1 = high - low
+    tr2 = (high - prev_close).abs()
+    tr3 = (low - prev_close).abs()
+
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    # ATR 標準計算也是使用 Wilder's Smoothing (alpha=1/N)
+    kline_df['atr' + str(windows)] = tr.ewm(alpha=1 / windows, min_periods=windows, adjust=False).mean().round(2)
+
+
+def append_adx(kline_df: pd.DataFrame, windows: int):
+    """趨勢強度指標 (ADX)"""
+    high = kline_df['high']
+    low = kline_df['low']
+    close = kline_df['close']
+    prev_high = high.shift(1)
+    prev_low = low.shift(1)
+    prev_close = close.shift(1)
+
+    # 1. 計算 True Range (TR)
+    tr = pd.concat([high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1).max(axis=1)
+    atr = tr.ewm(alpha=1 / windows, min_periods=windows, adjust=False).mean()
+
+    # 2. 計算 Directional Movement (+DM, -DM)
+    up_move = high - prev_high
+    down_move = prev_low - low
+
+    plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
+    minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
+
+    # 3. 計算平滑後的 DM
+    plus_di = 100 * (pd.Series(plus_dm, index=kline_df.index).ewm(alpha=1 / windows, adjust=False).mean() / atr)
+    minus_di = 100 * (pd.Series(minus_dm, index=kline_df.index).ewm(alpha=1 / windows, adjust=False).mean() / atr)
+
+    # 4. 計算 DX 並平滑得到 ADX
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di)
+    kline_df['adx' + str(windows)] = dx.ewm(alpha=1 / windows, min_periods=windows, adjust=False).mean().round(2)
+    # 可選：保存 DI+ 和 DI-
+    kline_df['plus_di' + str(windows)] = plus_di.round(2)
+    kline_df['minus_di' + str(windows)] = minus_di.round(2)
 
 
 def append_is_ma25_keep_grow(kline_df: pd.DataFrame, windows):

@@ -2,9 +2,11 @@ import logging
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
 from decimal import Decimal
+from enum import Enum
 from typing import List
 
 import pandas as pd
+from pandas import DataFrame
 
 from com.willy.binance.dto.trade_detail import TradeDetail
 from com.willy.binance.dto.trade_record import TradeRecord
@@ -14,6 +16,10 @@ from com.willy.binance.enums.trade_reason import TradeReason, TradeReasonType
 from com.willy.binance.service import trade_svc, chart_service, tech_idx_svc
 from com.willy.binance.service.binance_svc import BinanceSvc
 from com.willy.binance.util import type_util
+
+
+class IndexSwitch(Enum):
+    BASE = False
 
 
 class TradingStrategy(ABC):
@@ -35,6 +41,14 @@ class TradingStrategy(ABC):
         self.binance_svc = BinanceSvc(is_demo=False, is_testnet=False)
         self.trade_detail = TradeDetail(False, False, [])
         self.date_idx_map = {}
+
+    cross_test_config = None
+
+    def get_trade_index_switch_status(self, switch: IndexSwitch):
+        if switch in self.cross_test_config:
+            return self.cross_test_config[switch]
+        else:
+            return False
 
     def get_single_invest_amt(self):
         if self.last_td:
@@ -71,6 +85,11 @@ class TradingStrategy(ABC):
 
     @property
     @abstractmethod
+    def strategy_idx_switches(self) -> IndexSwitch:
+        pass
+
+    @property
+    @abstractmethod
     def tech_idx_list(self) -> List[TechIdxType]:
         pass
 
@@ -80,15 +99,19 @@ class TradingStrategy(ABC):
         pass
 
     @abstractmethod
+    def get_trade_signal(self, df: DataFrame) -> TradeRecord:
+        pass
+
+    @abstractmethod
     def get_trade_record_by_date(self, dt: datetime) -> TradeRecord:
         """
 
         """
         pass
 
-    @abstractmethod
-    def build_chart_dataframe(self, history_dataframe):
-        pass
+    # @abstractmethod
+    # def build_chart_dataframe(self, history_dataframe):
+    #     pass
 
     def build_analysis_df(self, history_df):
         # 1. 將 txn_detail_list 轉成 DataFrame
@@ -180,6 +203,7 @@ class TradingStrategy(ABC):
 
         backtest_start_time_list = backtest_df.index
         row_idx = 0
+        self.potential_signals = []
         # 逐日回測
         for start_time in backtest_start_time_list:
             # 準備共用參數
