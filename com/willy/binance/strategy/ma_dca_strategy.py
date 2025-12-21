@@ -158,7 +158,7 @@ def trade_if_cross_ma(last_ma7_and_ma25_rel, row, trade_detail, last_td, trade_l
                 return True
 
         elif last_ma7_and_ma25_rel < 0:
-            if row.ma7 > row.ma25 and not row.past20_ma25_fall:
+            if row.ma7 > row.ma25 and not row.is_ma25_keep_fall:
                 # ma7如果突破ma25的時候買
                 # # 如果之前做多，現在也做多，價差至少要>1000
                 # if last_td and last_td.trade_record.type == TradeType.BUY and abs(

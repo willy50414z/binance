@@ -1,18 +1,16 @@
-from datetime import datetime
 from decimal import Decimal
+from typing import List
 
-import numpy as np
-import pandas as pd
 from binance import Client
 from pandas import DataFrame
 
 from com.willy.binance.dto.trade_record import TradeRecord
 from com.willy.binance.enums.handle_fee_type import HandleFeeType
+from com.willy.binance.enums.tech_idx_type import TechIdxType
 from com.willy.binance.enums.trade_reason import TradeReason, TradeReasonType
 from com.willy.binance.enums.trade_type import TradeType
-from com.willy.binance.service import tech_idx_svc, trade_svc
+from com.willy.binance.service import trade_svc
 from com.willy.binance.strategy.trade_strategy import TradingStrategy
-from com.willy.binance.util import type_util
 
 
 def trade_if_not_trade_twice(now_trade_record, trade_detail):
@@ -39,38 +37,24 @@ class MovingAverageStrategy(TradingStrategy):
         return 0.25
 
     @property
-    def lookback_tickets(self) -> int:
+    def lookback_ticks(self) -> int:
         return 100
 
     @property
     def tickets_interval(self) -> str:
         return Client.KLINE_INTERVAL_15MINUTE
 
-    def get_trade_record_by_date(self, dt: datetime) -> tuple[None, DataFrame] | tuple[TradeRecord, DataFrame]:
-        data_fetch_start = dt - self.get_lookback_timedelta()
+    @property
+    def tech_idx_list(self) -> List[TechIdxType]:
+        return [TechIdxType.SMA_7, TechIdxType.SMA_25, TechIdxType.IS_MA25_KEEP_GROW_20,
+                TechIdxType.IS_MA25_KEEP_FALL_20, TechIdxType.MA7_AND_MA25_REL]
 
-        # 2. 獲取並準備數據
-        df = self.binance_svc.get_historical_klines_df(self.product, Client.KLINE_INTERVAL_15MINUTE, data_fetch_start,
-                                                       dt)
-
-        if df.iloc[-1].start_time != dt:
-            print(
-                f"can't get lastest price, request dt[{type_util.datetime_to_str(dt, "%Y/%m/%d %H:%M:%S")}]"
-                f"price start_time[{type_util.datetime_to_str(df.iloc[-1].start_time, "%Y/%m/%d %H:%M:%S")}]")
-            return None, df
-
-        self.prepare_data(df)
-
-        # 再篩選一次df，避免拿到多的資料
-        df = df[(df["start_time"] <= dt)]
-
+    def get_trade_record_by_date(self, df: DataFrame) -> None | TradeRecord:
         current_row = df.iloc[-1]
-        last_td = self.trade_detail.txn_detail_list[len(self.trade_detail.txn_detail_list) - 1] if len(
-            self.trade_detail.txn_detail_list) > 0 else None
 
-        trade_record = self.trade_if_cross_ma(last_td, current_row)
+        trade_record = self.trade_if_cross_ma(self.last_td, current_row)
         if trade_record:
-            return trade_record, df
+            return trade_record
 
         # # 做多，MA25連續空20期 => 平倉
         # trade_record = self.close_position_if_ma25_back(last_td, current_row)
@@ -78,64 +62,16 @@ class MovingAverageStrategy(TradingStrategy):
         #     return trade_record, df
 
         # 3. 獲利時，MA7/MA25連續3期逐漸變小且<100點 => 停利
-        trade_record = self.get_stop_loss_trade_record(last_td, current_row)
+        trade_record = self.get_stop_loss_trade_record(self.last_td, current_row)
         if trade_record:
-            return trade_record, df
+            return trade_record
 
         # 如果是假突破或假跌破(5K內又跌/漲回去)，把買/賣的賣/買回來
         trade_record = self.fake_break(current_row)
         if trade_record:
-            return trade_record, df
+            return trade_record
 
-        return None, df
-
-    def prepare_data(self, df: pd.DataFrame):
-        df.set_index('start_time')
-
-        tech_idx_svc.append_ma(df, 7)
-        tech_idx_svc.append_ma(df, 6)
-        tech_idx_svc.append_ma(df, 25)
-
-        # MA過去20天是否都上漲/下跌
-        df['ma25_diff'] = df['ma25'].diff()
-
-        # ma25 過去20天是否連續上漲
-        diff_int = df['ma25_diff'] > 0
-        diff_int = diff_int.astype(int)
-        past20_growth = diff_int.rolling(window=20, min_periods=20).min()
-        df['past20_ma25_growth'] = past20_growth.astype(bool)
-
-        # ma25 過去20天是否連續下跌
-        diff_ma25_diff = df['ma25_diff'] < 0
-        diff_int = diff_ma25_diff.astype(int)
-        past20_ma25_fall = diff_int.rolling(window=20, min_periods=20).min()
-        df['past20_ma25_fall'] = past20_ma25_fall.astype(bool)
-
-        # ma7_and_ma25_rel
-        diff_sign = np.sign(df['ma7'] - df['ma25'])  # 1, 0, -1
-
-        ma_rel = []
-        current_len = 0
-        current_sign = 0
-        for s in diff_sign:
-            if s == 0:
-                # 無方向性，重置
-                current_len = 0
-                current_sign = 0
-                ma_rel.append(0)
-            elif np.isnan(s):
-                ma_rel.append(0)
-            else:
-                if s == current_sign:
-                    current_len += 1
-                else:
-                    current_len = 1
-                    current_sign = s
-                # 將日數轉成輸出值，前提是你要的輸出就是日數本身
-                ma_rel.append(current_len * int(np.sign(current_sign)))
-
-        df['ma7_and_ma25_rel'] = ma_rel
-        df['last_ma7_and_ma25_rel'] = df['ma7_and_ma25_rel'].shift(1)
+        return None
 
     def build_chart_dataframe(self, history_dataframe):
         self.prepare_data(history_dataframe)
@@ -145,12 +81,12 @@ class MovingAverageStrategy(TradingStrategy):
 
     def close_position_if_ma25_back(self, last_td, row):
         if last_td:
-            if last_td.units > 0 and row.past20_ma25_fall:
+            if last_td.units > 0 and row.is_ma25_keep_fall_20:
                 return trade_svc.create_trade_record(row.start_time, TradeType.SELL, Decimal(row.open),
                                                      unit=last_td.units, handle_fee_type=HandleFeeType.TAKER,
                                                      reason=TradeReason(TradeReasonType.ACTIVE,
                                                                         "做多停利"))
-            elif last_td.units < 0 and row.past20_ma25_growth:
+            elif last_td.units < 0 and row.is_ma25_keep_grow_20:
                 return trade_svc.create_trade_record(row.start_time, TradeType.BUY, Decimal(row.open),
                                                      unit=last_td.units, handle_fee_type=HandleFeeType.TAKER,
                                                      reason=TradeReason(TradeReasonType.ACTIVE,
@@ -162,7 +98,7 @@ class MovingAverageStrategy(TradingStrategy):
         if abs(row.last_ma7_and_ma25_rel) >= 20:
             if row.last_ma7_and_ma25_rel > 0:
                 # ma7在ma25上面持續超過20期
-                if row.ma7 < row.ma25 and not row.past20_ma25_growth:
+                if row.ma7 < row.ma25 and not row.is_ma25_keep_grow_20:
                     # ma7如果跌破ma25的時候賣
                     # # 如果之前做空，現在也做空，價差至少要>1000
                     # if last_td and last_td.trade_record.type == TradeType.SELL and abs(
@@ -175,7 +111,7 @@ class MovingAverageStrategy(TradingStrategy):
                     else:
                         handle_unit = Decimal(0)
 
-                    trade_amt = Decimal(self.get_single_invest_amt(last_td))
+                    trade_amt = Decimal(self.get_single_invest_amt())
                     acct_handle_unit = handle_unit if handle_unit > 0 else Decimal(0)
                     trade_type = TradeType.SELL
 
@@ -188,7 +124,7 @@ class MovingAverageStrategy(TradingStrategy):
                     # 6. 連續2次符合條件且方向相同，直接平倉
                     return trade_if_not_trade_twice(now_trade_record, self.trade_detail)
             elif row.last_ma7_and_ma25_rel < 0:
-                if row.ma7 > row.ma25 and not row.past20_ma25_fall:
+                if row.ma7 > row.ma25 and not row.is_ma25_keep_fall_20:
                     # ma7如果突破ma25的時候買
                     # # 如果之前做多，現在也做多，價差至少要>1000
                     # if last_td and last_td.trade_record.type == TradeType.BUY and abs(
@@ -202,7 +138,7 @@ class MovingAverageStrategy(TradingStrategy):
                     else:
                         handle_unit = Decimal(0)
 
-                    trade_amt = Decimal(self.get_single_invest_amt(last_td))
+                    trade_amt = Decimal(self.get_single_invest_amt())
                     acct_handle_unit = handle_unit if handle_unit < 0 else Decimal(0)
                     trade_type = TradeType.BUY
 
