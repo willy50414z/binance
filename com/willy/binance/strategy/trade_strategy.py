@@ -19,7 +19,7 @@ from com.willy.binance.util import type_util
 
 
 class IndexSwitch(Enum):
-    BASE = False
+    pass
 
 
 class TradingStrategy(ABC):
@@ -96,10 +96,6 @@ class TradingStrategy(ABC):
     @property
     @abstractmethod
     def invest_and_guarantee_ratio(self) -> float:
-        pass
-
-    @abstractmethod
-    def get_trade_signal(self, df: DataFrame) -> TradeRecord:
         pass
 
     @abstractmethod

@@ -3,45 +3,44 @@ from concurrent.futures import ProcessPoolExecutor
 
 import pandas as pd
 
+from com.willy.binance.dto.cross_strategy_test_dto import CrossStrategyTestDto
 from com.willy.binance.enums.binance_product import BinanceProduct
 from com.willy.binance.service import trade_svc
 from com.willy.binance.strategy.moving_average_strategy import MovingAverageStrategy
 from com.willy.binance.util import type_util
 
+strategy = MovingAverageStrategy("ma_with_ma25_0101_1130_no_stop_profit_germini_1",
+                                 type_util.str_to_datetime("2025-11-01T00:00:00Z"),
+                                 type_util.str_to_datetime("2025-12-21T00:00:00Z"), 6000
+                                 , BinanceProduct.BTCUSDT, 20, {})
 
-def run_experiment(strategy):
+
+def run_experiment(config):
     """
     單一實驗執行點：這是給多執行緒呼叫的入口
     config 格式: {'use_rsi': True, 'use_adx': False, ...}
     """
-    test_id = f"EXP_{sum(strategy.cross_test_config.values())}_" + "_".join(
-        [k for k, v in strategy.cross_test_config.items() if v])
-
-    # 執行回測
-    strategy.run_backtest()
-
-    # 提取結果分析 (從 trade_svc 的總結獲取)
-    summary = trade_svc.get_backtest_summary(strategy.trade_detail)
-
-    # 併入當前的配置資訊，方便後續分析
-    summary.update(strategy.cross_test_config)
-    summary['test_id'] = test_id
-    return summary
+    test_id = f"EXP_{strategy.test_name}_" + "_".join([k.name for k, v in config.items() if v])
+    print(test_id)
+    # # 執行回測
+    # strategy.cross_test_config = crossStrategyTestDto.config
+    # strategy.run_backtest()
+    #
+    # # 提取結果分析 (從 trade_svc 的總結獲取)
+    # summary = trade_svc.get_backtest_summary(strategy.trade_detail)
+    #
+    # # 併入當前的配置資訊，方便後續分析
+    # summary.update(strategy.cross_test_config)
+    # summary['test_id'] = test_id
+    return {}
 
 
 if __name__ == '__main__':
-    strategy = MovingAverageStrategy("ma_with_ma25_0101_1130_no_stop_profit_germini_1",
-                                     # type_util.str_to_datetime("2025-11-01T00:00:00Z"),
-                                     type_util.str_to_datetime("2025-11-01T00:00:00Z"),
-                                     type_util.str_to_datetime("2025-12-21T00:00:00Z"), 6000
-                                     , BinanceProduct.BTCUSDT, 20, {})
-
     # 這裡初始化你的策略，並傳入 config
     switches = list(strategy.strategy_idx_switches)
 
     # 2. 產生所有 True/False 的排列組合 (2^n)
     combinations = list(itertools.product([True, False], repeat=len(switches)))
-
     # 3. 組合成字典，這裡 Key 就是 Enum 成員
     all_configs = [dict(zip(switches, combo)) for combo in combinations]
 
