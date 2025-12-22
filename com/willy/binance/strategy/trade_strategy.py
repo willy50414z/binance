@@ -6,7 +6,6 @@ from enum import Enum
 from typing import List
 
 import pandas as pd
-from pandas import DataFrame
 
 from com.willy.binance.dto.trade_detail import TradeDetail
 from com.willy.binance.dto.trade_record import TradeRecord
@@ -45,6 +44,8 @@ class TradingStrategy(ABC):
     cross_test_config = None
 
     def get_trade_index_switch_status(self, switch: IndexSwitch):
+        if self.cross_test_config is None:
+            return False
         if switch in self.cross_test_config:
             return self.cross_test_config[switch]
         else:
@@ -102,6 +103,13 @@ class TradingStrategy(ABC):
     def get_trade_record_by_date(self, dt: datetime) -> TradeRecord:
         """
 
+        """
+        pass
+
+    @abstractmethod
+    def is_meet_tech_idx_with_switch(self, row):
+        """
+        確認是否符合各項技術指標
         """
         pass
 
@@ -199,7 +207,6 @@ class TradingStrategy(ABC):
 
         backtest_start_time_list = backtest_df.index
         row_idx = 0
-        self.potential_signals = []
         # 逐日回測
         for start_time in backtest_start_time_list:
             # 準備共用參數
@@ -241,3 +248,5 @@ class TradingStrategy(ABC):
             , "product": self.product
             , "leverage": self.leverage
             , "other_args": self.other_args})
+
+        return analysis_df

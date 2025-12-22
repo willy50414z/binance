@@ -19,6 +19,6 @@ class TechIdxType(Enum):
     ADX_14 = ("append_adx", 14, 5.0)
 
     # 客製化指標
-    IS_MA25_KEEP_GROW_20 = ("append_is_ma25_keep_grow", 20, 1.0)
-    IS_MA25_KEEP_FALL_20 = ("append_is_ma25_keep_fall", 20, 1.0)
+    IS_MA25_KEEP_GROW = ("append_is_ma25_keep_grow", 20, 1.0)
+    IS_MA25_KEEP_FALL = ("append_is_ma25_keep_fall", 20, 1.0)
     MA7_AND_MA25_REL = ("append_ma7_and_ma25_rel", 25, 1.0)

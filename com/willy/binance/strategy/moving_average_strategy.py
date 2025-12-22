@@ -34,6 +34,31 @@ class MaIndexSwitch(IndexSwitch):
 
 
 class MovingAverageStrategy(TradingStrategy):
+    def is_meet_tech_idx_with_switch(self, row) -> bool:
+        if self.get_trade_index_switch_status(MaIndexSwitch.KEEP):
+            if row.ma7 < row.ma25 and row.is_ma25_keep_grow:
+                return False
+            if row.ma7 > row.ma25 and row.is_ma25_keep_fall:
+                return False
+
+        if self.get_trade_index_switch_status(MaIndexSwitch.RSI):
+            # if row.ma7 < row.ma25 and row.rsi < 30:
+            #     return False
+            if row.ma7 > row.ma25 and row.rsi < 60:
+                return False
+
+            # ADX 過濾：開關打開且趨勢太弱 (ADX < 25) 時攔截
+        if self.get_trade_index_switch_status(MaIndexSwitch.ADX):
+            if row.adx < 25:
+                return False
+
+            # MA25 趨勢過濾：開關打開且 MA25 沒有持續增長時攔截
+        if self.get_trade_index_switch_status(MaIndexSwitch.ATR):
+            if row.atr < (row.atr_mean * 0.8):
+                return False
+
+        return True
+
     invest_amt = 0
     guarantee_amt = 0
 
@@ -51,8 +76,8 @@ class MovingAverageStrategy(TradingStrategy):
 
     @property
     def tech_idx_list(self) -> List[TechIdxType]:
-        return [TechIdxType.SMA_7, TechIdxType.SMA_25, TechIdxType.IS_MA25_KEEP_GROW_20,
-                TechIdxType.IS_MA25_KEEP_FALL_20, TechIdxType.MA7_AND_MA25_REL, TechIdxType.ADX_14, TechIdxType.ATR_14,
+        return [TechIdxType.SMA_7, TechIdxType.SMA_25, TechIdxType.IS_MA25_KEEP_GROW,
+                TechIdxType.IS_MA25_KEEP_FALL, TechIdxType.MA7_AND_MA25_REL, TechIdxType.ADX_14, TechIdxType.ATR_14,
                 TechIdxType.RSI_14]
 
     @property
@@ -78,26 +103,12 @@ class MovingAverageStrategy(TradingStrategy):
 
         return None
 
-    def close_position_if_ma25_back(self, last_td, row):
-        if last_td:
-            if last_td.units > 0 and row.is_ma25_keep_fall_20:
-                return trade_svc.create_trade_record(row.start_time, TradeType.SELL, Decimal(row.open),
-                                                     unit=last_td.units, handle_fee_type=HandleFeeType.TAKER,
-                                                     reason=TradeReason(TradeReasonType.ACTIVE,
-                                                                        "做多停利"))
-            elif last_td.units < 0 and row.is_ma25_keep_grow_20:
-                return trade_svc.create_trade_record(row.start_time, TradeType.BUY, Decimal(row.open),
-                                                     unit=last_td.units, handle_fee_type=HandleFeeType.TAKER,
-                                                     reason=TradeReason(TradeReasonType.ACTIVE,
-                                                                        "放空停利"))
-        return None
-
     def trade_if_cross_ma(self, last_td, row):
         # 1. MA7 / MA25 超過20期沒有交叉 > 交叉後確立做多/空方向
         if abs(row.last_ma7_and_ma25_rel) >= 20:
             if row.last_ma7_and_ma25_rel > 0:
                 # ma7在ma25上面持續超過20期
-                if row.ma7 < row.ma25 and not row.is_ma25_keep_grow_20:
+                if row.ma7 < row.ma25 and self.is_meet_tech_idx_with_switch(row):
                     # ma7如果跌破ma25的時候賣
                     # # 如果之前做空，現在也做空，價差至少要>1000
                     # if last_td and last_td.trade_record.type == TradeType.SELL and abs(
@@ -122,8 +133,8 @@ class MovingAverageStrategy(TradingStrategy):
 
                     # 6. 連續2次符合條件且方向相同，直接平倉
                     return trade_if_not_trade_twice(now_trade_record, last_td)
-            elif row.last_ma7_and_ma25_rel < 0:
-                if row.ma7 > row.ma25 and not row.is_ma25_keep_fall_20:
+            elif row.last_ma7_and_ma25_rel < 0 and self.is_meet_tech_idx_with_switch(row):
+                if row.ma7 > row.ma25:
                     # ma7如果突破ma25的時候買
                     # # 如果之前做多，現在也做多，價差至少要>1000
                     # if last_td and last_td.trade_record.type == TradeType.BUY and abs(

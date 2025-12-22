@@ -17,22 +17,32 @@ def append_rsi(kline_df: pd.DataFrame, windows: int):
     avg_loss = loss.ewm(alpha=1 / windows, min_periods=windows, adjust=False).mean()
 
     rs = avg_gain / avg_loss
-    kline_df['rsi' + str(windows)] = (100 - (100 / (1 + rs))).round(2)
+    kline_df['rsi'] = (100 - (100 / (1 + rs))).round(2)
 
 
-def append_atr(kline_df: pd.DataFrame, windows: int):
-    """平均真實波幅 (ATR)"""
+def append_atr(kline_df: pd.DataFrame, windows: int, mean_windows: int = 20):
+    """
+    平均真實波幅 (ATR) 及其移動平均線
+    :param windows: ATR 的計算週期 (通常為 14)
+    :param mean_windows: ATR 平均值的計算週期 (常用於判斷波動是否過低)
+    """
     high = kline_df['high']
     low = kline_df['low']
     prev_close = kline_df['close'].shift(1)
 
+    # 計算真實波幅 (TR)
     tr1 = high - low
     tr2 = (high - prev_close).abs()
     tr3 = (low - prev_close).abs()
-
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-    # ATR 標準計算也是使用 Wilder's Smoothing (alpha=1/N)
-    kline_df['atr' + str(windows)] = tr.ewm(alpha=1 / windows, min_periods=windows, adjust=False).mean().round(2)
+
+    # 1. 計算當前 ATR (Wilder's Smoothing)
+    atr_col_name = f'atr'
+    kline_df[atr_col_name] = tr.ewm(alpha=1 / windows, min_periods=windows, adjust=False).mean().round(2)
+
+    # 2. 計算 ATR 的平均值 (ATR Mean 20)
+    # 我們使用簡單移動平均 (SMA) 來計算 ATR 的平均基準
+    kline_df[f'atr_mean'] = kline_df[atr_col_name].rolling(window=mean_windows).mean().round(2)
 
 
 def append_adx(kline_df: pd.DataFrame, windows: int):
@@ -61,7 +71,7 @@ def append_adx(kline_df: pd.DataFrame, windows: int):
 
     # 4. 計算 DX 並平滑得到 ADX
     dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di)
-    kline_df['adx' + str(windows)] = dx.ewm(alpha=1 / windows, min_periods=windows, adjust=False).mean().round(2)
+    kline_df['adx'] = dx.ewm(alpha=1 / windows, min_periods=windows, adjust=False).mean().round(2)
     # 可選：保存 DI+ 和 DI-
     kline_df['plus_di' + str(windows)] = plus_di.round(2)
     kline_df['minus_di' + str(windows)] = minus_di.round(2)
@@ -73,7 +83,7 @@ def append_is_ma25_keep_grow(kline_df: pd.DataFrame, windows):
     diff_int = kline_df['ma25_diff'] > 0
     diff_int = diff_int.astype(int)
     is_ma25_keep_grow = diff_int.rolling(window=windows, min_periods=windows).min()
-    kline_df['is_ma25_keep_grow_' + str(windows)] = is_ma25_keep_grow.astype(bool)
+    kline_df['is_ma25_keep_grow'] = is_ma25_keep_grow.astype(bool)
 
 
 def append_is_ma25_keep_fall(kline_df: pd.DataFrame, windows):
@@ -82,7 +92,7 @@ def append_is_ma25_keep_fall(kline_df: pd.DataFrame, windows):
     diff_ma25_diff = kline_df['ma25_diff'] < 0
     diff_int = diff_ma25_diff.astype(int)
     is_ma25_keep_fall = diff_int.rolling(window=windows, min_periods=windows).min()
-    kline_df['is_ma25_keep_fall_' + str(windows)] = is_ma25_keep_fall.astype(bool)
+    kline_df['is_ma25_keep_fall'] = is_ma25_keep_fall.astype(bool)
 
 
 def append_ma7_and_ma25_rel(kline_df: pd.DataFrame, windows):

@@ -1,65 +1,144 @@
+# 全域配置
+
 import itertools
 from concurrent.futures import ProcessPoolExecutor
+from typing import Type
 
 import pandas as pd
 
-from com.willy.binance.dto.cross_strategy_test_dto import CrossStrategyTestDto
 from com.willy.binance.enums.binance_product import BinanceProduct
-from com.willy.binance.service import trade_svc
 from com.willy.binance.strategy.moving_average_strategy import MovingAverageStrategy
 from com.willy.binance.util import type_util
 
-strategy = MovingAverageStrategy("ma_with_ma25_0101_1130_no_stop_profit_germini_1",
-                                 type_util.str_to_datetime("2025-11-01T00:00:00Z"),
-                                 type_util.str_to_datetime("2025-12-21T00:00:00Z"), 6000
-                                 , BinanceProduct.BTCUSDT, 20, {})
+
+# 這裡保留你的 imports...
+# from com.willy.binance.enums.binance_product import BinanceProduct ...
+
+# --- 1. 全域工具函式 (確保多執行緒可序列化) ---
+
+def evaluate_performance(analysis_df, initial_capital):
+    """計算更完整的策略 KPI，包含風險指標"""
+    # 確保資料是照時間排序的
+    analysis_df = analysis_df.sort_index()
+
+    # 找出所有交易結算的點
+    trades = analysis_df[analysis_df['profit'].notnull()].copy()
+
+    if trades.empty:
+        return {'total_return_pct': 0, 'win_rate': 0, 'profit_factor': 0,
+                'max_drawdown': 0, 'sharpe_ratio': 0, 'trade_count': 0}
+
+    # --- 1. 收益指標 ---
+    final_balance = analysis_df['acct_balance'].ffill().iloc[-1]
+    total_return_pct = ((final_balance - initial_capital) / initial_capital) * 100
+
+    # --- 2. 勝率與獲利因子 ---
+    win_trades = trades[trades['profit'] > 0]
+    trade_count = len(trades)
+    win_rate = (len(win_trades) / trade_count) * 100 if trade_count > 0 else 0
+
+    gross_profit = trades[trades['profit'] > 0]['profit'].sum()
+    gross_loss = abs(trades[trades['profit'] < 0]['profit'].sum())
+    profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf')
+
+    # --- 3. 最大回撤 (Max Drawdown) ---
+    # 計算帳戶餘額的歷史最高點，進而算出從最高點掉下來的百分比
+    balance_curve = analysis_df['acct_balance'].ffill()
+    historical_max = balance_curve.expanding().max()
+    drawdowns = (balance_curve - historical_max) / historical_max
+    max_drawdown = drawdowns.min() * 100  # 這裡是負值，例如 -15.5 代表回撤 15.5%
+
+    # --- 4. 夏普比率 (Sharpe Ratio) 簡化版 ---
+    # 衡量每承受一單位風險能換到的超額回報
+    returns = balance_curve.pct_change().dropna()
+    if len(returns) > 1 and returns.std() != 0:
+        # 這裡假設無風險利率為 0，並將日波動轉為年化 (以加密貨幣 24/7 計算)
+        sharpe = (returns.mean() / returns.std()) * (365 ** 0.5)
+    else:
+        sharpe = 0
+
+    return {
+        'total_return_pct': round(total_return_pct, 2),
+        'max_drawdown': round(max_drawdown, 2),
+        'sharpe_ratio': round(sharpe, 2),
+        'win_rate': round(win_rate, 2),
+        'profit_factor': round(profit_factor, 2),
+        'trade_count': trade_count,
+        'avg_profit': round(trades['profit'].mean(), 2)
+    }
 
 
-def run_experiment(config):
+def run_experiment_wrapper(task_args):
     """
-    單一實驗執行點：這是給多執行緒呼叫的入口
-    config 格式: {'use_rsi': True, 'use_adx': False, ...}
+    接收封裝好的參數：(strategy_type, strategy_args, config)
     """
-    test_id = f"EXP_{strategy.test_name}_" + "_".join([k.name for k, v in config.items() if v])
-    print(test_id)
-    # # 執行回測
-    # strategy.cross_test_config = crossStrategyTestDto.config
-    # strategy.run_backtest()
-    #
-    # # 提取結果分析 (從 trade_svc 的總結獲取)
-    # summary = trade_svc.get_backtest_summary(strategy.trade_detail)
-    #
-    # # 併入當前的配置資訊，方便後續分析
-    # summary.update(strategy.cross_test_config)
-    # summary['test_id'] = test_id
-    return {}
+    strat_type, strat_args, config = task_args
 
+    # 實例化
+    curr_strategy = strat_type(*strat_args)
+    curr_strategy.cross_test_config = config
+    label = " + ".join([k.name for k, v in config.items() if v]) or "Base"
+    curr_strategy.test_name = f"{curr_strategy.test_name}_{label}"
+
+    # 執行回測
+    analyze_df = curr_strategy.run_backtest()
+    df_for_analysis = curr_strategy.build_analysis_df(analyze_df)
+
+    # 計算統計
+    stats = evaluate_performance(df_for_analysis, curr_strategy.initial_capital)
+
+    # 加上標籤
+    stats['test_id'] = label
+    for k, v in config.items():
+        stats[k.name] = v
+
+    return stats
+
+
+# --- 2. 主服務類別 ---
+
+class CrossStrategyTestService:
+    def __init__(self, strategy_type: Type[MovingAverageStrategy], strategy_args: tuple):
+        self.strategy_type = strategy_type
+        self.strategy_args = strategy_args
+
+    def start(self):
+        # 取得 Enum 類別
+        temp_strat = self.strategy_type(*self.strategy_args)
+        switches = list(temp_strat.strategy_idx_switches)
+
+        # 產生所有組合
+        combinations = list(itertools.product([True, False], repeat=len(switches)))
+        all_configs = [dict(zip(switches, combo)) for combo in combinations]
+
+        print(f"🚀 啟動多核交叉回測 | 核心目標: {self.strategy_type.__name__}")
+        print(f"組合數量: {len(all_configs)}")
+
+        # 打包任務參數供 map 使用
+        tasks = [(self.strategy_type, self.strategy_args, conf) for conf in all_configs]
+
+        with ProcessPoolExecutor() as executor:
+            results = list(executor.map(run_experiment_wrapper, tasks))
+
+        # 排名與輸出
+        report_df = pd.DataFrame(results).sort_values(by='total_return_pct', ascending=False)
+
+        print("\n🏆 全能回測優化排行榜 (前 10 名):")
+        # 加入 max_drawdown 和 sharpe_ratio
+        display_cols = ['test_id', 'total_return_pct', 'max_drawdown', 'sharpe_ratio', 'profit_factor', 'trade_count']
+        print(report_df[display_cols].head(10))
+
+        report_df.to_csv("strategy_optimization_report.csv", index=False)
+        print(f"\n✅ 結果已匯出至 strategy_optimization_report.csv")
+
+
+# --- 3. 執行進入點 ---
 
 if __name__ == '__main__':
-    # 這裡初始化你的策略，並傳入 config
-    switches = list(strategy.strategy_idx_switches)
+    test_args = ("ma_with_ma25_0101_1130_no_stop_profit_germini_xxx",
+                 type_util.str_to_datetime("2025-01-01T00:00:00Z"),
+                 type_util.str_to_datetime("2025-12-21T00:00:00Z"), 6000
+                 , BinanceProduct.BTCUSDT, 20, {})
 
-    # 2. 產生所有 True/False 的排列組合 (2^n)
-    combinations = list(itertools.product([True, False], repeat=len(switches)))
-    # 3. 組合成字典，這裡 Key 就是 Enum 成員
-    all_configs = [dict(zip(switches, combo)) for combo in combinations]
-
-    print(f"🚀 開始交叉測試，共 {len(all_configs)} 組配置...")
-
-    # 3. 使用 ProcessPoolExecutor 進行多執行緒運算
-    # 注意：量化回測通常是 CPU 密集，ProcessPool 比 ThreadPool 有效
-    with ProcessPoolExecutor(max_workers=None) as executor:  # None 自動抓 CPU 核心數
-        results = list(executor.map(run_experiment, all_configs))
-
-    # 4. 結果分析與排名
-    analysis_df = pd.DataFrame(results)
-
-    # 依照獲利因子或總報酬排序
-    analysis_df = analysis_df.sort_values(by='總報酬率 (%)', ascending=False)
-
-    # 5. 輸出前五名最佳組合
-    print("\n🏆 最佳策略組合排名：")
-    print(analysis_df[['test_id', '總報酬率 (%)', '勝率 (%)', '獲利因子']].head(5))
-
-    # 存成 Excel 方便你細看
-    analysis_df.to_csv("backtest_optimization_results.csv", index=False)
+    service = CrossStrategyTestService(MovingAverageStrategy, test_args)
+    service.start()
