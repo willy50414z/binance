@@ -18,6 +18,15 @@ line_user_id = config.get("userid_willy")
 
 def lambda_handler(event, context):
     now_utc_time = datetime.datetime.now().astimezone(ZoneInfo("UTC"))
+
+    #先撈歷史價格
+
+    # 監聽socket，能即時取得最新價格
+
+    # 條件判斷
+
+    #發通知
+
     # now_utc_time = type_util.str_to_date_min("202512061800")
     trade_record, df = maStrategy.get_trade_record_by_date(now_utc_time)
     print(

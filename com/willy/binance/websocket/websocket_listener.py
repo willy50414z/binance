@@ -1,7 +1,10 @@
 import datetime
+import logging
 import time
 
-from binance import ThreadedWebsocketManager
+from binance import ThreadedWebsocketManager, Client
+
+from com.willy.binance.enums.binance_product import BinanceProduct
 
 # --- 配置參數 ---
 # ⚠️ 注意：使用 ThreadedWebsocketManager 不一定需要 API Key 和 Secret，
@@ -12,6 +15,30 @@ API_SECRET = ''
 
 SYMBOL = 'BTCUSDT'  # 交易對
 INTERVAL = '15m'  # K 線間隔
+
+
+def listen_kline_socket(msg_handler, product: BinanceProduct, kline_interval=Client.KLINE_INTERVAL_15MINUTE):
+    twm = ThreadedWebsocketManager(api_key=API_KEY, api_secret=API_SECRET)
+    twm.start()  # 啟動執行緒管理器
+
+    logging.info(f"開始監聽 {SYMBOL} 的 {INTERVAL} K 線...")
+
+    # 啟動 K 線串流訂閱
+    # ks_klines 是 K-line Stream 的縮寫，它會呼叫 handle_socket_message 函式來處理數據
+    kline_stream = twm.start_kline_socket(
+        callback=msg_handler,
+        symbol=product.name,
+        interval=kline_interval
+    )
+
+    # 主執行緒進入一個無限循環，保持程式運行，直到手動中斷 (Ctrl+C)
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\n--- 接收到中斷訊號，停止 WebSocket 連線 ---")
+        twm.stop()  # 停止所有 WebSocket 連線和執行緒
+        print("程式已安全退出。")
 
 
 def handle_socket_message(msg):
