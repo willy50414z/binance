@@ -1,20 +1,11 @@
-# 全域配置
-
 import itertools
 from concurrent.futures import ProcessPoolExecutor
 from typing import Type
 
 import pandas as pd
 
-from com.willy.binance.enums.binance_product import BinanceProduct
 from com.willy.binance.strategy.moving_average_strategy import MovingAverageStrategy
-from com.willy.binance.util import type_util
 
-
-# 這裡保留你的 imports...
-# from com.willy.binance.enums.binance_product import BinanceProduct ...
-
-# --- 1. 全域工具函式 (確保多執行緒可序列化) ---
 
 def evaluate_performance(analysis_df, initial_capital):
     """計算更完整的策略 KPI，包含風險指標"""
@@ -95,50 +86,31 @@ def run_experiment_wrapper(task_args):
     return stats
 
 
-# --- 2. 主服務類別 ---
+def start(strategy_type: Type[MovingAverageStrategy], strategy_args: tuple):
+    # 取得 Enum 類別
+    temp_strat = strategy_type(*strategy_args)
+    switches = list(temp_strat.strategy_idx_switches)
 
-class CrossStrategyTestService:
-    def __init__(self, strategy_type: Type[MovingAverageStrategy], strategy_args: tuple):
-        self.strategy_type = strategy_type
-        self.strategy_args = strategy_args
+    # 產生所有組合
+    combinations = list(itertools.product([True, False], repeat=len(switches)))
+    all_configs = [dict(zip(switches, combo)) for combo in combinations]
 
-    def start(self):
-        # 取得 Enum 類別
-        temp_strat = self.strategy_type(*self.strategy_args)
-        switches = list(temp_strat.strategy_idx_switches)
+    print(f"🚀 啟動多核交叉回測 | 核心目標: {strategy_type.__name__}")
+    print(f"組合數量: {len(all_configs)}")
 
-        # 產生所有組合
-        combinations = list(itertools.product([True, False], repeat=len(switches)))
-        all_configs = [dict(zip(switches, combo)) for combo in combinations]
+    # 打包任務參數供 map 使用
+    tasks = [(strategy_type, strategy_args, conf) for conf in all_configs]
 
-        print(f"🚀 啟動多核交叉回測 | 核心目標: {self.strategy_type.__name__}")
-        print(f"組合數量: {len(all_configs)}")
+    with ProcessPoolExecutor() as executor:
+        results = list(executor.map(run_experiment_wrapper, tasks))
 
-        # 打包任務參數供 map 使用
-        tasks = [(self.strategy_type, self.strategy_args, conf) for conf in all_configs]
+    # 排名與輸出
+    report_df = pd.DataFrame(results).sort_values(by='total_return_pct', ascending=False)
 
-        with ProcessPoolExecutor() as executor:
-            results = list(executor.map(run_experiment_wrapper, tasks))
+    print("\n🏆 全能回測優化排行榜 (前 10 名):")
+    # 加入 max_drawdown 和 sharpe_ratio
+    display_cols = ['test_id', 'total_return_pct', 'max_drawdown', 'sharpe_ratio', 'profit_factor', 'trade_count']
+    print(report_df[display_cols].head(10))
 
-        # 排名與輸出
-        report_df = pd.DataFrame(results).sort_values(by='total_return_pct', ascending=False)
-
-        print("\n🏆 全能回測優化排行榜 (前 10 名):")
-        # 加入 max_drawdown 和 sharpe_ratio
-        display_cols = ['test_id', 'total_return_pct', 'max_drawdown', 'sharpe_ratio', 'profit_factor', 'trade_count']
-        print(report_df[display_cols].head(10))
-
-        report_df.to_csv("strategy_optimization_report.csv", index=False)
-        print(f"\n✅ 結果已匯出至 strategy_optimization_report.csv")
-
-
-# --- 3. 執行進入點 ---
-
-if __name__ == '__main__':
-    test_args = ("ma_with_ma25_0101_1130_no_stop_profit_germini_xxx",
-                 type_util.str_to_datetime("2025-01-01T00:00:00Z"),
-                 type_util.str_to_datetime("2025-12-21T00:00:00Z"), 6000
-                 , BinanceProduct.BTCUSDT, 20, {})
-
-    service = CrossStrategyTestService(MovingAverageStrategy, test_args)
-    service.start()
+    report_df.to_csv("strategy_optimization_report.csv", index=False)
+    print(f"\n✅ 結果已匯出至 strategy_optimization_report.csv")
