@@ -30,6 +30,7 @@ def listen_kline_socket(msg_handler, product: BinanceProduct, kline_interval=Cli
         symbol=product.name,
         interval=kline_interval
     )
+    print(f"kline_stream[{kline_stream}]")
 
     # 主執行緒進入一個無限循環，保持程式運行，直到手動中斷 (Ctrl+C)
     try:
