@@ -28,9 +28,12 @@ def trade_if_not_trade_twice(now_trade_record, last_td):
 
 class MaIndexSwitch(IndexSwitch):
     RSI = 1
-    ADX = 2
+    # ADX = 2
     ATR = 3
     KEEP = 4
+    FAKE_BREAK = 5
+    FAKE_BREAK_EARN = 6
+    FAKE_BREAK_RSI = 7
 
 
 class MovingAverageStrategy(TradingStrategy):
@@ -48,11 +51,11 @@ class MovingAverageStrategy(TradingStrategy):
                 return False
 
             # ADX 過濾：開關打開且趨勢太弱 (ADX < 25) 時攔截
-        if self.get_trade_index_switch_status(MaIndexSwitch.ADX):
-            if row.adx < 25:
-                return False
+        # if self.get_trade_index_switch_status(MaIndexSwitch.ADX):
+        #     if row.adx < 25:
+        #         return False
 
-            # MA25 趨勢過濾：開關打開且 MA25 沒有持續增長時攔截
+        # MA25 趨勢過濾：開關打開且 MA25 沒有持續增長時攔截
         if self.get_trade_index_switch_status(MaIndexSwitch.ATR):
             if row.atr < (row.atr_mean * 0.8):
                 return False
@@ -85,21 +88,22 @@ class MovingAverageStrategy(TradingStrategy):
         return MaIndexSwitch
 
     def get_trade_record_by_date(self, df: DataFrame) -> None | TradeRecord:
-        current_row = df.iloc[-1]
+        lastest_row = df.iloc[-1]
 
-        trade_record = self.trade_if_cross_ma(self.last_td, current_row)
+        trade_record = self.trade_if_cross_ma(self.last_td, lastest_row)
         if trade_record:
             return trade_record
 
         # 3. 獲利時，MA7/MA25連續3期逐漸變小且<100點 => 停利
-        trade_record = self.get_stop_loss_trade_record(self.last_td, current_row)
+        trade_record = self.get_stop_loss_trade_record(self.last_td, lastest_row)
         if trade_record:
             return trade_record
 
         # 如果是假突破或假跌破(5K內又跌/漲回去)，把買/賣的賣/買回來
-        trade_record = self.fake_break(current_row)
-        if trade_record:
-            return trade_record
+        if self.get_trade_index_switch_status(MaIndexSwitch.FAKE_BREAK):
+            trade_record = self.fake_break(lastest_row)
+            if trade_record:
+                return trade_record
 
         return None
 
@@ -202,19 +206,31 @@ class MovingAverageStrategy(TradingStrategy):
 
             # last_1_td = trade_detail.txn_detail_list[len(trade_detail.txn_detail_list) - 1]
             # last_2_td = trade_detail.txn_detail_list[len(trade_detail.txn_detail_list) - 2]
+
+            if self.get_trade_index_switch_status(MaIndexSwitch.FAKE_BREAK_EARN) and last_1_td.profit > 0:
+                return None
+
             # 近2個交易是做反向交易
             # 賣>買>馬上跌破 > 賣
             # 買>賣>馬上突破 > 買
             if last_1_td.trade_record.type != last_2_td.trade_record.type \
                     and ((last_1_td.trade_record.type == TradeType.BUY and row.ma7 < row.ma25 and (
-                    self.date_idx_map[row.start_time] - self.date_idx_map[last_1_td.trade_record.date]) < 10) \
+                    self.date_idx_map[row.start_time] - self.date_idx_map[last_1_td.trade_record.date]) < 5) \
                          or (last_1_td.trade_record.type == TradeType.SELL and row.ma7 > row.ma25 and (
-                            self.date_idx_map[row.start_time] - self.date_idx_map[last_1_td.trade_record.date]) < 10)):
+                            self.date_idx_map[row.start_time] - self.date_idx_map[last_1_td.trade_record.date]) < 5)):
                 # build trade record
                 trade_type = TradeType.BUY if last_1_td.trade_record.type == TradeType.SELL else TradeType.SELL
+
+                if self.get_trade_index_switch_status(MaIndexSwitch.FAKE_BREAK_RSI):
+                    if (row.rsi > 80 and trade_type == TradeType.BUY) or (
+                            row.rsi < 20 and trade_type == TradeType.SELL):
+                        return None
+
+                unit = abs(last_2_td.units) if last_1_td.units == 0 else abs(last_2_td.units) + abs(last_1_td.units)
+
                 touch_ma_trade_record = trade_svc.create_trade_record(row.start_time, trade_type,
                                                                       Decimal(row.close),
-                                                                      unit=abs(last_2_td.units) + abs(last_1_td.units),
+                                                                      unit=unit,
                                                                       handle_fee_type=HandleFeeType.TAKER,
                                                                       reason=TradeReason(
                                                                           TradeReasonType.ACTIVE,

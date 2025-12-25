@@ -10,6 +10,7 @@ import pandas as pd
 from binance import Client, ORDER_TYPE_MARKET, ORDER_TYPE_LIMIT, TIME_IN_FORCE_GTC, ORDER_TYPE_STOP_LOSS
 from pandas import DataFrame
 
+from com.willy.binance.config import const
 from com.willy.binance.config.config_util import config_util
 from com.willy.binance.dto.acct_dto import AcctDto, AcctBalance
 from com.willy.binance.dto.binance_kline import BinanceKline
@@ -107,7 +108,7 @@ class BinanceSvc:
                 updated_df = new_data_df
 
             # export
-            data_dir = Path(__file__).parent.parent.parent.parent.parent / "data"
+            data_dir = const.PROJECT_DIR / "data"
             csv_path = data_dir / f"{binance_product.name}_{kline_interval}.csv"
             updated_df.to_csv(csv_path, index=False)
 

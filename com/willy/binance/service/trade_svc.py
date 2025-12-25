@@ -149,7 +149,7 @@ def build_txn_detail_list(binanceKline: BinanceKline, invest_amt: Decimal, guara
     :param trade_detail:
     :return:
     """
-    current_price = binanceKline.close
+    current_price = binanceKline.open
     current_date = binanceKline.start_time
     last_handle_units = Decimal(0)
     last_handle_amt = Decimal(0)

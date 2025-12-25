@@ -1,9 +1,11 @@
 import itertools
+import os
 from concurrent.futures import ProcessPoolExecutor
 from typing import Type
 
 import pandas as pd
 
+from com.willy.binance.config import const
 from com.willy.binance.strategy.moving_average_strategy import MovingAverageStrategy
 
 
@@ -112,5 +114,7 @@ def start(strategy_type: Type[MovingAverageStrategy], strategy_args: tuple):
     display_cols = ['test_id', 'total_return_pct', 'max_drawdown', 'sharpe_ratio', 'profit_factor', 'trade_count']
     print(report_df[display_cols].head(10))
 
-    report_df.to_csv("strategy_optimization_report.csv", index=False)
+    strategy_optimization_report_dir = f"{const.PROJECT_DIR}/report"
+    os.makedirs(strategy_optimization_report_dir, exist_ok=True)
+    report_df.to_csv(f"{strategy_optimization_report_dir}/strategy_optimization_report.csv", index=False)
     print(f"\n✅ 結果已匯出至 strategy_optimization_report.csv")

@@ -214,8 +214,8 @@ class TradingStrategy(ABC):
             row_idx += 1
             self.last_td = self.trade_detail.txn_detail_list[len(self.trade_detail.txn_detail_list) - 1] if len(
                 self.trade_detail.txn_detail_list) > 0 else None
-            if row_idx % 1000 == 0:
-                print(f"finish {row_idx} / {backtest_start_time_list.shape[0]}")
+            # if row_idx % 1000 == 0:
+            #     print(f"finish {row_idx} / {backtest_start_time_list.shape[0]}")
 
             # 帳戶餘額已歸零須停止回測
             if len(self.trade_detail.txn_detail_list) > 0:
@@ -224,13 +224,16 @@ class TradingStrategy(ABC):
                     logging.info(f"[{start_time}] 帳戶餘額已歸零 ({last_balance})，終止回測。")
                     break
 
+            current_idx = full_back_test_df.index.get_loc(start_time)
+            get_trade_record_df = full_back_test_df.iloc[:current_idx]
+            prev_row = get_trade_record_df.iloc[-1]
             current_row = backtest_df.loc[start_time]
+
             # 確認有沒有爆倉
-            self.check_break_position(current_row)
+            self.check_break_position(prev_row)
 
             # 決策是否交易
-            get_trade_record_dataframe = full_back_test_df[:start_time]
-            trade_record = self.get_trade_record_by_date(get_trade_record_dataframe)
+            trade_record = self.get_trade_record_by_date(get_trade_record_df)
 
             # 紀錄交易紀錄
             trade_svc.build_txn_detail_list_df(current_row, self.invest_amt, self.guarantee_amt,
