@@ -35,13 +35,19 @@ class TradingStrategy(ABC):
         self.product = product
         self.leverage = leverage
         self.other_args = other_args
-        self.invest_amt = round(float(self.invest_and_guarantee_ratio * initial_capital), 2)
-        self.guarantee_amt = initial_capital - self.invest_amt
+        self.invest_amt = round(float(self.max_invest_ratio * initial_capital), 2)
+        # self.guarantee_amt = initial_capital - self.invest_amt
         self.binance_svc = BinanceSvc(is_demo=False, is_testnet=False)
-        self.trade_detail = TradeDetail(False, False, [])
+        self.trade_detail = TradeDetail([])
         self.date_idx_map = {}
 
     cross_test_config = None
+
+    def get_invest_amt(self):
+        if self.last_td is not None:
+            return round(float(self.last_td.acct_balance) * float(self.max_invest_ratio), 2) * self.leverage
+        else:
+            return round(float(self.initial_capital) * float(self.max_invest_ratio), 2) * self.leverage
 
     def get_trade_index_switch_status(self, switch: IndexSwitch):
         if self.cross_test_config is None:
@@ -50,12 +56,6 @@ class TradingStrategy(ABC):
             return self.cross_test_config[switch]
         else:
             return False
-
-    def get_single_invest_amt(self):
-        if self.last_td:
-            return min(self.invest_amt, int(self.last_td.acct_balance)) * self.leverage
-        else:
-            return self.invest_amt * self.leverage
 
     def get_lookback_timedelta(self) -> timedelta:
         required_buffer_ticks = max(self.get_required_buffer_ticks(self.tech_idx_list), self.lookback_ticks)
@@ -95,9 +95,8 @@ class TradingStrategy(ABC):
         pass
 
     @property
-    @abstractmethod
-    def invest_and_guarantee_ratio(self) -> float:
-        pass
+    def max_invest_ratio(self) -> float:
+        return 0.5
 
     @abstractmethod
     def get_trade_record_by_date(self, dt: datetime) -> TradeRecord:
@@ -163,8 +162,7 @@ class TradingStrategy(ABC):
         if self.last_td and ((self.last_td.units > 0 and Decimal(row.low) < self.last_td.force_close_offset_price) or (
                 self.last_td.units < 0 and Decimal(row.high) > self.last_td.force_close_offset_price)):
             trade_svc.build_txn_detail_list_df(row,
-                                               self.invest_amt,
-                                               self.guarantee_amt,
+                                               self.initial_capital,
                                                self.leverage,
                                                trade_svc.create_close_trade_record(row.start_time,
                                                                                    self.last_td.force_close_offset_price,
@@ -236,7 +234,7 @@ class TradingStrategy(ABC):
             trade_record = self.get_trade_record_by_date(get_trade_record_df)
 
             # 紀錄交易紀錄
-            trade_svc.build_txn_detail_list_df(current_row, self.invest_amt, self.guarantee_amt,
+            trade_svc.build_txn_detail_list_df(current_row, self.initial_capital,
                                                self.leverage,
                                                trade_record,
                                                self.trade_detail)

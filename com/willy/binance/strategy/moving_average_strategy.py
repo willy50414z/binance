@@ -62,13 +62,6 @@ class MovingAverageStrategy(TradingStrategy):
 
         return True
 
-    invest_amt = 0
-    guarantee_amt = 0
-
-    @property
-    def invest_and_guarantee_ratio(self) -> float:
-        return 0.25
-
     @property
     def lookback_ticks(self) -> int:
         return 100
@@ -125,7 +118,7 @@ class MovingAverageStrategy(TradingStrategy):
                     else:
                         handle_unit = Decimal(0)
 
-                    trade_amt = Decimal(self.get_single_invest_amt())
+                    trade_amt = Decimal(self.get_invest_amt())
                     acct_handle_unit = handle_unit if handle_unit > 0 else Decimal(0)
                     trade_type = TradeType.SELL
 
@@ -151,7 +144,7 @@ class MovingAverageStrategy(TradingStrategy):
                     else:
                         handle_unit = Decimal(0)
 
-                    trade_amt = Decimal(self.get_single_invest_amt())
+                    trade_amt = Decimal(self.get_invest_amt())
                     acct_handle_unit = handle_unit if handle_unit < 0 else Decimal(0)
                     trade_type = TradeType.BUY
 
