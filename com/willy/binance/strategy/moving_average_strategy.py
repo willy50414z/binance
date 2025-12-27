@@ -1,3 +1,4 @@
+from datetime import datetime
 from decimal import Decimal
 from typing import List, Type
 
@@ -32,6 +33,7 @@ class MaIndexSwitch(IndexSwitch):
     ATR = 3
     KEEP = 4
     FAKE_BREAK = 5
+    TIME_FILTER = 6
     # FAKE_BREAK_EARN = 6
     # FAKE_BREAK_RSI = 7
 
@@ -59,6 +61,9 @@ class MovingAverageStrategy(TradingStrategy):
         if self.get_trade_index_switch_status(MaIndexSwitch.ATR):
             if row.atr < (row.atr_mean * 0.8):
                 return False
+
+        if self.get_trade_index_switch_status(MaIndexSwitch.TIME_FILTER):
+            return self.is_trade_allowed_time(row.end_time)
 
         return True
 
@@ -105,6 +110,23 @@ class MovingAverageStrategy(TradingStrategy):
                 return trade_record
 
         return None
+
+    def is_trade_allowed_time(self, current_time: datetime) -> bool:
+        """
+        過濾掉 22:00 到 01:00 之間的交易訊號
+        """
+        # 取得小時與分鐘
+        hour = current_time.hour
+        minute = current_time.minute
+
+        # 舉例：禁止 22:00 ~ 01:00 (包含 22:15, 00:45)
+        # 注意：這裡的時間通常是 UTC，請根據你的 K 線時區調整
+        forbidden_hours = [22, 23, 0]
+
+        if hour in forbidden_hours:
+            return False
+
+        return True
 
     def trade_if_cross_ma(self, last_td, row):
         # 1. MA7 / MA25 超過20期沒有交叉 > 交叉後確立做多/空方向
