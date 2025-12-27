@@ -51,9 +51,9 @@ class BinanceSvc:
         for kline in klines:
             kline_list.append(
                 BinanceKline(start_time=type_util.timestamp_to_datetime(kline[0] // 1000, tz=timezone.utc),
-                             open=Decimal(kline[1]),
-                             high=Decimal(kline[2]), low=Decimal(kline[3]), close=Decimal(kline[4]),
-                             vol=Decimal(kline[5]),
+                             open=Decimal(str(kline[1])),
+                             high=Decimal(str(kline[2])), low=Decimal(str(kline[3])), close=Decimal(str(kline[4])),
+                             vol=Decimal(str(kline[5])),
                              end_time=type_util.timestamp_to_datetime(kline[6] // 1000, tz=timezone.utc),
                              number_of_trade=kline[8]))
         return kline_list
@@ -95,7 +95,8 @@ class BinanceSvc:
                                                 'number_of_trade'])
             new_data_df = new_data_df.apply(parse_datetime_row, axis=1)
             new_data_df = new_data_df.astype(
-                {'open': float, 'high': float, 'low': float, 'close': float, 'vol': float, 'number_of_trade': float})
+                {'open': float, 'high': float, 'low': float, 'close': float, 'vol': float,
+                 'number_of_trade': float})
             new_data_df = new_data_df.set_index('start_time', drop=False).sort_index()
 
             # merge dataframes

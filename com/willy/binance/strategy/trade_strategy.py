@@ -1,12 +1,16 @@
 import logging
+import os
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, ROUND_FLOOR
 from enum import Enum
 from typing import List
 
 import pandas as pd
 
+from com.willy.binance.config import const
+from com.willy.binance.config.const import DECIMAL_PLACE_2
+from com.willy.binance.dto.cool_down_period_setting_dto import CoolDownPeriodSettingDto
 from com.willy.binance.dto.trade_detail import TradeDetail
 from com.willy.binance.dto.trade_record import TradeRecord
 from com.willy.binance.enums.binance_product import BinanceProduct
@@ -24,9 +28,11 @@ class IndexSwitch(Enum):
 class TradingStrategy(ABC):
     def __init__(self, test_name, start_time: datetime,
                  end_time: datetime,
-                 initial_capital: int,
+                 initial_capital: Decimal,
                  product: BinanceProduct,
-                 leverage: int, other_args: dict):
+                 leverage: Decimal, other_args=None, cool_down_period: CoolDownPeriodSettingDto = None):
+        if other_args is None:
+            other_args = {}
         self.last_td = None
         self.test_name = test_name
         self.start_time = start_time
@@ -35,19 +41,22 @@ class TradingStrategy(ABC):
         self.product = product
         self.leverage = leverage
         self.other_args = other_args
-        self.invest_amt = round(float(self.max_invest_ratio * initial_capital), 2)
         # self.guarantee_amt = initial_capital - self.invest_amt
         self.binance_svc = BinanceSvc(is_demo=False, is_testnet=False)
         self.trade_detail = TradeDetail([])
         self.date_idx_map = {}
+        self.cool_down_period = cool_down_period
 
     cross_test_config = None
 
     def get_invest_amt(self):
+        # return Decimal("30000")
         if self.last_td is not None:
-            return round(float(self.last_td.acct_balance) * float(self.max_invest_ratio), 2) * self.leverage
+            return (self.last_td.acct_balance * self.max_invest_ratio).quantize(DECIMAL_PLACE_2,
+                                                                                ROUND_FLOOR) * self.leverage
         else:
-            return round(float(self.initial_capital) * float(self.max_invest_ratio), 2) * self.leverage
+            return (self.initial_capital * self.max_invest_ratio).quantize(DECIMAL_PLACE_2,
+                                                                           ROUND_FLOOR) * self.leverage
 
     def get_trade_index_switch_status(self, switch: IndexSwitch):
         if self.cross_test_config is None:
@@ -59,18 +68,21 @@ class TradingStrategy(ABC):
 
     def get_lookback_timedelta(self) -> timedelta:
         required_buffer_ticks = max(self.get_required_buffer_ticks(self.tech_idx_list), self.lookback_ticks)
+        return self.get_timedelta_by_tick_count(required_buffer_ticks)
+
+    def get_timedelta_by_tick_count(self, tick_count: int):
         if self.tickets_interval.endswith("m"):
             return timedelta(
-                minutes=float(self.tickets_interval[:len(self.tickets_interval) - 1]) * required_buffer_ticks)
+                minutes=float(self.tickets_interval[:len(self.tickets_interval) - 1]) * tick_count)
         elif self.tickets_interval.endswith("h"):
             return timedelta(
-                hours=float(self.tickets_interval[:len(self.tickets_interval) - 1]) * required_buffer_ticks)
+                hours=float(self.tickets_interval[:len(self.tickets_interval) - 1]) * tick_count)
         elif self.tickets_interval.endswith("d"):
             return timedelta(
-                days=float(self.tickets_interval[:len(self.tickets_interval) - 1]) * required_buffer_ticks)
+                days=float(self.tickets_interval[:len(self.tickets_interval) - 1]) * tick_count)
         elif self.tickets_interval.endswith("w"):
             return timedelta(
-                weeks=float(self.tickets_interval[:len(self.tickets_interval) - 1]) * required_buffer_ticks)
+                weeks=float(self.tickets_interval[:len(self.tickets_interval) - 1]) * tick_count)
         else:
             raise ValueError(f"unexpect time unit[{self.tickets_interval}]")
 
@@ -95,8 +107,8 @@ class TradingStrategy(ABC):
         pass
 
     @property
-    def max_invest_ratio(self) -> float:
-        return 0.5
+    def max_invest_ratio(self) -> Decimal:
+        return Decimal("0.25")
 
     @abstractmethod
     def get_trade_record_by_date(self, dt: datetime) -> TradeRecord:
@@ -159,8 +171,8 @@ class TradingStrategy(ABC):
 
     def check_break_position(self, row):
         # 確認有沒有爆倉
-        if self.last_td and ((self.last_td.units > 0 and Decimal(row.low) < self.last_td.force_close_offset_price) or (
-                self.last_td.units < 0 and Decimal(row.high) > self.last_td.force_close_offset_price)):
+        if self.last_td and ((self.last_td.units > 0 and row.low < self.last_td.force_close_offset_price) or (
+                self.last_td.units < 0 and row.high > self.last_td.force_close_offset_price)):
             trade_svc.build_txn_detail_list_df(row,
                                                self.initial_capital,
                                                self.leverage,
@@ -187,6 +199,82 @@ class TradingStrategy(ABC):
         for tech_idx in self.tech_idx_list:
             tech_idx_method = getattr(tech_idx_svc, tech_idx.method_name)
             tech_idx_method(df, tech_idx.base_window)
+
+    def build_trade_detail_analysis_df(self):
+        """
+        將 txn_detail_list 轉換為以 '每一筆完整交易' 為單位的 DataFrame
+        """
+        trades = []
+        current_trade = None
+
+        for txn in self.trade_detail.txn_detail_list:
+            # 當 units 從 0 變為有值，代表開倉
+            if txn.trade_record and txn.units != 0 and (current_trade is None or current_trade['closed']):
+                current_trade = {
+                    'entry_date': txn.date,
+                    'entry_price': txn.trade_record.price,
+                    'type': txn.trade_record.type,
+                    'units': txn.units,
+                    'entry_reason': txn.trade_record.reason.desc if txn.trade_record.reason else "",
+                    'closed': False,
+                    'max_favorable_price': txn.trade_record.price,  # 最高獲利價
+                    'max_adverse_price': txn.trade_record.price,  # 最大回撤價
+                }
+
+            # 追蹤持倉期間的價格波動 (MFE/MAE 分析)
+            if current_trade and not current_trade['closed']:
+                if txn.units > 0:  # 多單
+                    current_trade['max_favorable_price'] = max(current_trade['max_favorable_price'],
+                                                               txn.trade_record.price)
+                    current_trade['max_adverse_price'] = min(current_trade['max_adverse_price'], txn.trade_record.price)
+                else:  # 空單
+                    current_trade['max_favorable_price'] = min(current_trade['max_favorable_price'],
+                                                               txn.trade_record.price)
+                    current_trade['max_adverse_price'] = max(current_trade['max_adverse_price'], txn.trade_record.price)
+
+            # 當 units 變回 0，或者發生反手（units 正負號改變），代表前一筆交易結束
+            if current_trade and not current_trade['closed']:
+                if txn.units == 0 or (txn.trade_record and txn.units * current_trade['units'] < 0):
+                    current_trade['exit_date'] = txn.date
+                    current_trade['exit_price'] = txn.trade_record.price
+                    current_trade['profit'] = txn.profit
+                    current_trade[
+                        'exit_reason'] = txn.trade_record.reason.desc if txn.trade_record and txn.trade_record.reason else "持有"
+                    current_trade['duration'] = (txn.date - current_trade['entry_date']).total_seconds() / 3600  # 持倉小時
+                    current_trade['closed'] = True
+                    trades.append(current_trade.copy())
+
+        df = pd.DataFrame(trades)
+        # 增加關鍵分析欄位
+        if not df.empty:
+            df['is_win'] = df['profit'] > 0
+            df['pnl_ratio'] = df['profit'] / (df['entry_price'] * abs(df['units']))  # 報酬率
+        return df
+
+    def is_in_cool_down_period(self, start_time: datetime) -> bool:
+        if not self.cool_down_period:
+            return False
+
+        # 還在冷靜期
+        if self.cool_down_period.next_trade_time is not None and start_time < self.cool_down_period.next_trade_time:
+            return True
+
+        if len(self.trade_detail.txn_detail_list) > self.cool_down_period.loss_count:
+            # 確認有沒有連續虧損
+            traded_txn_list = [td for td in self.trade_detail.txn_detail_list if
+                               td.trade_record is not None and td.trade_record.unit != 0
+                               and (self.cool_down_period.last_loss_time is None
+                                    or (self.cool_down_period.last_loss_time is not None
+                                        and td.date > self.cool_down_period.last_loss_time))]
+            last_n_txn_detail_list = traded_txn_list[-self.cool_down_period.loss_count:]
+            if len(last_n_txn_detail_list) > 0 and len([td for td in last_n_txn_detail_list if td.profit > 0]) == 0:
+                # 連續虧損
+                self.cool_down_period.next_trade_time = start_time + self.get_timedelta_by_tick_count(
+                    self.cool_down_period.cool_down_period)
+                self.cool_down_period.last_loss_time = self.last_td.date
+                return True
+            else:
+                return False
 
     def run_backtest(self):
         # 先計算技術指標需要提前撈的資料
@@ -222,6 +310,10 @@ class TradingStrategy(ABC):
                     logging.info(f"[{start_time}] 帳戶餘額已歸零 ({last_balance})，終止回測。")
                     break
 
+            if self.is_in_cool_down_period(start_time):
+                logging.warn(f"{start_time} in cool period, stop trade")
+                continue
+
             current_idx = full_back_test_df.index.get_loc(start_time)
             get_trade_record_df = full_back_test_df.iloc[:current_idx]
             prev_row = get_trade_record_df.iloc[-1]
@@ -245,9 +337,16 @@ class TradingStrategy(ABC):
         chart_service.export_trade_point_chart(self.test_name, analysis_df, {
             "start_time": type_util.datetime_to_str(self.start_time, "%Y-%m-%d %H:%M:%S")
             , "end_time": type_util.datetime_to_str(self.end_time, "%Y-%m-%d %H:%M:%S")
-            , "initial_capital": self.initial_capital
+            , "initial_capital": float(self.initial_capital)
             , "product": self.product
             , "leverage": self.leverage
             , "other_args": self.other_args})
+
+        # 交易明細
+        strategy_optimization_report_dir = f"{const.PROJECT_DIR}/report"
+        os.makedirs(strategy_optimization_report_dir, exist_ok=True)
+        self.build_trade_detail_analysis_df().to_csv(
+            f"{strategy_optimization_report_dir}/trade_detail.csv", index=False)
+        print(f"\n✅ trade_detail已匯出至 trade_detail.csv")
 
         return analysis_df

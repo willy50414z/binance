@@ -42,7 +42,8 @@ def export_trade_point_chart(chart_name, analysis_df, ma_dca_backtest_req):
     # 我們利用 'trade_type' 欄位是否為 NaN 來判斷
     txn_rows = analysis_df[analysis_df['trade_type'].notna()]
     profit_series = (
-        pd.to_numeric(analysis_df['total_profit'], errors='coerce')  # 強制轉為數值，非數值變 NaN
+        pd.to_numeric(analysis_df['total_profit'] / ma_dca_backtest_req["initial_capital"],
+                      errors='coerce')  # 強制轉為數值，非數值變 NaN
         .ffill()  # 向前填充
         .fillna(0)  # 剩下的填 0
         .tolist()

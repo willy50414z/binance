@@ -32,8 +32,8 @@ class MaIndexSwitch(IndexSwitch):
     ATR = 3
     KEEP = 4
     FAKE_BREAK = 5
-    FAKE_BREAK_EARN = 6
-    FAKE_BREAK_RSI = 7
+    # FAKE_BREAK_EARN = 6
+    # FAKE_BREAK_RSI = 7
 
 
 class MovingAverageStrategy(TradingStrategy):
@@ -80,6 +80,12 @@ class MovingAverageStrategy(TradingStrategy):
     def strategy_idx_switches(self) -> Type[IndexSwitch]:
         return MaIndexSwitch
 
+    def get_invest_amt(self):
+        if self.last_td is not None and self.last_td.acct_balance > 0:
+            return self.last_td.acct_balance * Decimal("0.1") * self.leverage
+        else:
+            return self.initial_capital * Decimal("0.1") * self.leverage
+
     def get_trade_record_by_date(self, df: DataFrame) -> None | TradeRecord:
         lastest_row = df.iloc[-1]
 
@@ -116,14 +122,14 @@ class MovingAverageStrategy(TradingStrategy):
                     if last_td is not None:
                         handle_unit = last_td.units
                     else:
-                        handle_unit = Decimal(0)
+                        handle_unit = Decimal("0")
 
-                    trade_amt = Decimal(self.get_invest_amt())
-                    acct_handle_unit = handle_unit if handle_unit > 0 else Decimal(0)
+                    trade_amt = self.get_invest_amt()
+                    acct_handle_unit = handle_unit if handle_unit > 0 else Decimal("0")
                     trade_type = TradeType.SELL
 
-                    unit = trade_svc.calc_buyable_units(trade_amt, Decimal(row.close)) + acct_handle_unit
-                    now_trade_record = trade_svc.create_trade_record(row.start_time, trade_type, Decimal(row.close),
+                    unit = trade_svc.calc_buyable_units(trade_amt, row.close) + acct_handle_unit
+                    now_trade_record = trade_svc.create_trade_record(row.start_time, trade_type, row.close,
                                                                      unit=unit, handle_fee_type=HandleFeeType.TAKER,
                                                                      reason=TradeReason(TradeReasonType.ACTIVE,
                                                                                         "符合條件"))
@@ -142,14 +148,14 @@ class MovingAverageStrategy(TradingStrategy):
                     if last_td is not None:
                         handle_unit = last_td.units
                     else:
-                        handle_unit = Decimal(0)
+                        handle_unit = Decimal("0")
 
-                    trade_amt = Decimal(self.get_invest_amt())
-                    acct_handle_unit = handle_unit if handle_unit < 0 else Decimal(0)
+                    trade_amt = self.get_invest_amt()
+                    acct_handle_unit = handle_unit if handle_unit < 0 else Decimal("0")
                     trade_type = TradeType.BUY
 
-                    unit = trade_svc.calc_buyable_units(trade_amt, Decimal(row.close)) - acct_handle_unit
-                    now_trade_record = trade_svc.create_trade_record(row.start_time, trade_type, Decimal(row.close),
+                    unit = trade_svc.calc_buyable_units(trade_amt, row.close) - acct_handle_unit
+                    now_trade_record = trade_svc.create_trade_record(row.start_time, trade_type, row.close,
                                                                      unit=unit, handle_fee_type=HandleFeeType.TAKER,
                                                                      reason=TradeReason(TradeReasonType.ACTIVE,
                                                                                         "符合條件"))
@@ -159,7 +165,8 @@ class MovingAverageStrategy(TradingStrategy):
 
     def get_stop_loss_trade_record(self, last_td, row):
         if last_td:
-            unrealize_profit = trade_svc.calc_profit(row.close, last_td.handle_amt, last_td.handling_fee, last_td.units)
+            unrealize_profit = trade_svc.calc_profit(Decimal(str(row.close)), last_td.handle_amt, last_td.handling_fee,
+                                                     last_td.units)
             if unrealize_profit and unrealize_profit > 0:
                 is_need_close = False
                 # if abs(df.iloc[i - 2].ma7 - df.iloc[i - 2].ma25) > abs(df.iloc[i - 1].ma7 - df.iloc[i - 1].ma25) > abs(
@@ -177,13 +184,13 @@ class MovingAverageStrategy(TradingStrategy):
                 #     reset_available_trade_amt(trade_level_list)
             elif unrealize_profit and unrealize_profit < 0:
                 # 5. 虧損超過1000點 => 停損
-                if last_td.units > 0 and (last_td.handle_amt / last_td.units - Decimal(row.low)) > 1000:
+                if last_td.units > 0 and (last_td.handle_amt / last_td.units - Decimal(str(row.low))) > 1000:
                     return trade_svc.create_close_trade_record(row.start_time, round(
                         last_td.handle_amt / last_td.units, 2) - 1000, last_td,
                                                                reason=TradeReason(
                                                                    TradeReasonType.PASSIVE,
                                                                    "停損"))
-                if last_td.units < 0 and (Decimal(row.high) + last_td.handle_amt / last_td.units) > 1000:
+                if last_td.units < 0 and (Decimal(str(row.high)) + last_td.handle_amt / last_td.units) > 1000:
                     return trade_svc.create_close_trade_record(row.start_time, round(
                         last_td.handle_amt / last_td.units * -1, 2) + 1000, last_td,
                                                                reason=TradeReason(
@@ -200,8 +207,8 @@ class MovingAverageStrategy(TradingStrategy):
             # last_1_td = trade_detail.txn_detail_list[len(trade_detail.txn_detail_list) - 1]
             # last_2_td = trade_detail.txn_detail_list[len(trade_detail.txn_detail_list) - 2]
 
-            if self.get_trade_index_switch_status(MaIndexSwitch.FAKE_BREAK_EARN) and last_1_td.profit > 0:
-                return None
+            # if self.get_trade_index_switch_status(MaIndexSwitch.FAKE_BREAK_EARN) and last_1_td.profit > 0:
+            #     return None
 
             # 近2個交易是做反向交易
             # 賣>買>馬上跌破 > 賣
@@ -214,15 +221,15 @@ class MovingAverageStrategy(TradingStrategy):
                 # build trade record
                 trade_type = TradeType.BUY if last_1_td.trade_record.type == TradeType.SELL else TradeType.SELL
 
-                if self.get_trade_index_switch_status(MaIndexSwitch.FAKE_BREAK_RSI):
-                    if (row.rsi > 80 and trade_type == TradeType.BUY) or (
-                            row.rsi < 20 and trade_type == TradeType.SELL):
-                        return None
+                # if self.get_trade_index_switch_status(MaIndexSwitch.FAKE_BREAK_RSI):
+                #     if (row.rsi > 80 and trade_type == TradeType.BUY) or (
+                #             row.rsi < 20 and trade_type == TradeType.SELL):
+                #         return None
 
                 unit = abs(last_2_td.units) if last_1_td.units == 0 else abs(last_2_td.units) + abs(last_1_td.units)
 
                 touch_ma_trade_record = trade_svc.create_trade_record(row.start_time, trade_type,
-                                                                      Decimal(row.close),
+                                                                      row.close,
                                                                       unit=unit,
                                                                       handle_fee_type=HandleFeeType.TAKER,
                                                                       reason=TradeReason(

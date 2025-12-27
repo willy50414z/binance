@@ -11,7 +11,7 @@ from com.willy.binance.dto.trade_detail import TradeDetail
 from com.willy.binance.dto.trade_record import TradeRecord
 from com.willy.binance.dto.txn_detail import TxnDetail
 from com.willy.binance.enums.handle_fee_type import HandleFeeType
-from com.willy.binance.enums.trade_reason import TradeReason
+from com.willy.binance.enums.trade_reason import TradeReason, TradeReasonType
 from com.willy.binance.enums.trade_type import TradeType
 
 
@@ -22,13 +22,12 @@ def calc_max_loss(highest_price: Decimal, lowest_price: Decimal, total_handle_am
         return min(calc_profit(highest_price, total_handle_amt, total_handle_fee, units, handle_fee_type),
                    calc_profit(lowest_price, total_handle_amt, total_handle_fee, units, handle_fee_type))
     else:
-        return Decimal(0)
+        return Decimal("0")
 
 
 def calc_profit(current_price: Decimal, total_handle_amt: Decimal, total_handle_fee, units: Decimal,
                 handle_fee_type=HandleFeeType.TAKER):
-    current_price = Decimal(current_price)
-    fee_rate = Decimal(config_util("binance.trade.handle.fee").get(handle_fee_type.name))
+    fee_rate = Decimal(str(config_util("binance.trade.handle.fee").get(handle_fee_type.name)))
     if units > 0:
         # 平倉多倉
         # (賣金 - 賣手續) - 買金 - 買手續
@@ -57,18 +56,18 @@ def calc_force_close_offset_price(profit: Decimal, total_handle_amt: Decimal, to
     Returns:
 
     """
-    handle_fee_ratio = Decimal(config_util("binance.trade.handle.fee").get(handle_fee_type.name))
+    handle_fee_ratio = Decimal(str(config_util("binance.trade.handle.fee").get(handle_fee_type.name)))
     if units > 0:
         force_close_offset_price = (profit + total_handle_amt + total_handle_fee) / units / (1 - handle_fee_ratio)
     elif units < 0:
         force_close_offset_price = ((total_handle_amt - total_handle_fee) - profit) / -1 / units / (
-                1 + handle_fee_ratio)
+                1 + handle_fee_ratio) - 1
     else:
         return None
     return force_close_offset_price.quantize(Decimal("1"), rounding=ROUND_CEILING)
 
 
-def calc_buyable_units(invest_amt: Decimal, price: Decimal) -> Decimal:
+def calc_buyable_units(invest_amt: Decimal, price: float) -> Decimal:
     """
 
     Args:
@@ -81,22 +80,20 @@ def calc_buyable_units(invest_amt: Decimal, price: Decimal) -> Decimal:
     """
     if invest_amt is None or invest_amt <= Decimal("0"):
         return Decimal("0")
-    return (invest_amt / price).quantize(Decimal("0.001"), rounding=ROUND_FLOOR)
+    return (invest_amt / Decimal(str(price))).quantize(Decimal("0.001"), rounding=ROUND_FLOOR)
 
 
 def calc_handle_fee(price: Decimal, units: Decimal, handle_fee_type: HandleFeeType = HandleFeeType.TAKER
                     ) -> Decimal:
-    handle_fee_ratio = Decimal(config_util("binance.trade.handle.fee").get(handle_fee_type.name))
-    units = Decimal(units)
-    price = Decimal(price)
+    handle_fee_ratio = Decimal(str(config_util("binance.trade.handle.fee").get(handle_fee_type.name)))
     return (price * units * handle_fee_ratio).quantize(DECIMAL_PLACE_2, rounding=ROUND_CEILING)
 
 
 def calc_trade_amt(price: Decimal, units: Decimal) -> Decimal:
-    return Decimal(price) * Decimal(units)
+    return price * units
 
 
-def create_trade_record(date: datetime, trade_type: TradeType, price: Decimal, amt: Decimal = None,
+def create_trade_record(date: datetime, trade_type: TradeType, price: float, amt: Decimal = None,
                         unit: Decimal = None,
                         handle_fee_type: HandleFeeType = HandleFeeType.TAKER,
                         reason: TradeReason = "") -> TradeRecord | None:
@@ -110,7 +107,7 @@ def create_trade_record(date: datetime, trade_type: TradeType, price: Decimal, a
         buyable_units = unit
 
     if buyable_units and buyable_units > 0:
-        return TradeRecord(date, trade_type, price, buyable_units, handle_fee_type, reason)
+        return TradeRecord(date, trade_type, Decimal(str(price)), buyable_units, handle_fee_type, reason)
     else:
         return None
 
@@ -124,21 +121,22 @@ def create_close_trade_record(date: datetime, price: Decimal, txn_detail: TxnDet
     return create_trade_record(date, trade_type, price, amt, unit, handle_fee_type, reason=reason)
 
 
-def build_txn_detail_list_df(row, invest_amt, guarantee_amt,
-                             leverage_ratio,
+def build_txn_detail_list_df(row, invest_amt: Decimal,
+                             leverage_ratio: Decimal,
                              trade_record: TradeRecord | None, trade_detail: TradeDetail):
     if trade_record is None:
         return
     return build_txn_detail_list(
-        BinanceKline(row.start_time, Decimal(row.open), Decimal(row.high), Decimal(row.low), Decimal(row.close),
-                     Decimal(row.vol), row.end_time,
-                     int(row.number_of_trade)), Decimal(invest_amt), Decimal(guarantee_amt), Decimal(leverage_ratio),
+        BinanceKline(row.start_time, Decimal(str(row.open)), Decimal(str(row.high)), Decimal(str(row.low)),
+                     Decimal(str(row.close)),
+                     Decimal(str(row.vol)), row.end_time,
+                     int(row.number_of_trade)), invest_amt, leverage_ratio,
         trade_record,
         trade_detail)
 
 
-def build_txn_detail_list(binanceKline: BinanceKline, invest_amt: Decimal, guarantee_amt: Decimal,
-                          leverage_ratio: Decimal,
+def build_txn_detail_list(binanceKline: BinanceKline, invest_amt: Decimal,
+                          leverage: Decimal,
                           trade_record: TradeRecord | None, trade_detail: TradeDetail):
     """
 
@@ -151,15 +149,15 @@ def build_txn_detail_list(binanceKline: BinanceKline, invest_amt: Decimal, guara
     """
     current_price = binanceKline.open
     current_date = binanceKline.start_time
-    last_handle_units = Decimal(0)
-    last_handle_amt = Decimal(0)
-    last_handle_fee = Decimal(0)
-    last_trade_detail_guarantee = Decimal(0)
-    last_trade_detail_force_close_offset_price = Decimal(0)
+    last_handle_units = Decimal("0")
+    last_handle_amt = Decimal("0")
+    last_handle_fee = Decimal("0")
+    last_trade_detail_guarantee = Decimal("0")
+    last_trade_detail_force_close_offset_price = Decimal("0")
     last_trade_detail_acct_balance = invest_amt
-    last_trade_break_even_point_price = Decimal(0)
-    last_trade_max_loss = Decimal(0)
-    last_total_profit = Decimal(0)
+    last_trade_break_even_point_price = Decimal("0")
+    last_trade_max_loss = Decimal("0")
+    last_total_profit = Decimal("0")
     if len(trade_detail.txn_detail_list) > 0:
         last_trade_detail = trade_detail.txn_detail_list[len(trade_detail.txn_detail_list) - 1]
         last_handle_units = last_trade_detail.units
@@ -172,7 +170,7 @@ def build_txn_detail_list(binanceKline: BinanceKline, invest_amt: Decimal, guara
         last_trade_max_loss = last_trade_detail.max_loss
         last_total_profit = last_trade_detail.total_profit
 
-    if trade_record:
+    if trade_record is not None and trade_record.unit != 0:
         if trade_record.type == TradeType.BUY:
             total_handle_units = last_handle_units + trade_record.unit
             trade_amt = calc_trade_amt(trade_record.price, trade_record.unit)
@@ -180,8 +178,8 @@ def build_txn_detail_list(binanceKline: BinanceKline, invest_amt: Decimal, guara
                 total_handle_amt = last_handle_amt + trade_amt
                 total_handle_fee = last_handle_fee + calc_handle_fee(trade_record.price, trade_record.unit,
                                                                      trade_record.handle_fee_type)
-                profit = Decimal(0)
-                profit_ratio = Decimal(0)
+                profit = Decimal("0")
+                profit_ratio = Decimal("0")
             else:
                 # 賣轉買
                 if trade_record.unit > abs(last_handle_units):
@@ -189,39 +187,49 @@ def build_txn_detail_list(binanceKline: BinanceKline, invest_amt: Decimal, guara
                     remain_unit = (trade_record.unit + last_handle_units)
                     total_handle_amt = calc_trade_amt(trade_record.price, remain_unit)
                     total_handle_fee = calc_handle_fee(trade_record.price, remain_unit, trade_record.handle_fee_type)
-                    profit = calc_profit(trade_record.price, last_handle_amt, last_handle_fee, last_handle_units,
-                                         trade_record.handle_fee_type)
-                    profit_ratio = profit / last_trade_detail_guarantee
+                    sell_amt = last_handle_amt - last_handle_fee
+                    buy_amt = trade_record.price * last_handle_units * -1 + calc_handle_fee(trade_record.price,
+                                                                                            last_handle_units * -1,
+                                                                                            trade_record.handle_fee_type)
+                    profit = (sell_amt - buy_amt).quantize(DECIMAL_PLACE_2, ROUND_FLOOR)
+                    # profit = calc_profit(trade_record.price, last_handle_amt, last_handle_fee, last_handle_units,
+                    #                      trade_record.handle_fee_type)
                 else:
                     # 買入部分<放空艙位
                     total_handle_amt = last_handle_amt / last_handle_units * total_handle_units
                     total_handle_fee = last_handle_fee / last_handle_units * total_handle_units
-                    profit = calc_profit(trade_record.price,
-                                         -1 * (last_handle_amt / last_handle_units * trade_record.unit),
-                                         last_handle_fee - total_handle_fee, -1 * trade_record.unit,
-                                         trade_record.handle_fee_type)
-                    profit_ratio = profit / ((last_handle_amt - total_handle_amt) / leverage_ratio).quantize(
-                        DECIMAL_PLACE_2, rounding=ROUND_CEILING)
+                    sell_amt = last_handle_amt - total_handle_amt - last_handle_fee - total_handle_fee
+                    handle_fee = calc_handle_fee(trade_record.price, trade_record.unit, trade_record.handle_fee_type)
+                    buy_amt = trade_record.price * trade_record.unit + handle_fee
+                    profit = (sell_amt - buy_amt).quantize(DECIMAL_PLACE_2, ROUND_FLOOR)
+                    # profit = calc_profit(trade_record.price,
+                    #                      -1 * (last_handle_amt / last_handle_units * trade_record.unit),
+                    #                      last_handle_fee - total_handle_fee, -1 * trade_record.unit,
+                    #                      trade_record.handle_fee_type)
+                profit_ratio = profit / sell_amt / leverage
 
-            guarantee = (total_handle_amt / leverage_ratio).quantize(DECIMAL_PLACE_2, rounding=ROUND_CEILING)
-            acct_balance = invest_amt + guarantee_amt + (last_total_profit + profit)
+            total_profit = last_total_profit + profit
+            stock_cost = (total_handle_amt / leverage + total_handle_fee).quantize(DECIMAL_PLACE_2, ROUND_CEILING)
+            # 總投資額+累計獲利-庫存成本
+            acct_balance = invest_amt + total_profit - stock_cost
+            guarantee = (total_handle_amt / leverage).quantize(DECIMAL_PLACE_2, rounding=ROUND_CEILING)
             max_loss = calc_max_loss(binanceKline.high, binanceKline.low, total_handle_amt, total_handle_fee,
                                      total_handle_units,
                                      HandleFeeType.TAKER)
 
-            force_close_offset_price = calc_force_close_offset_price(-1 * (invest_amt + guarantee_amt),
+            force_close_offset_price = calc_force_close_offset_price(-1 * invest_amt,
                                                                      total_handle_amt,
                                                                      total_handle_fee,
                                                                      total_handle_units,
                                                                      HandleFeeType.TAKER)
-            break_even_point_price = calc_force_close_offset_price(Decimal(0),
+            break_even_point_price = calc_force_close_offset_price(Decimal("0"),
                                                                    total_handle_amt, total_handle_fee,
                                                                    total_handle_units)
 
             trade_detail.txn_detail_list.append(
                 TxnDetail(current_date, total_handle_units, total_handle_amt, total_handle_fee,
                           guarantee,
-                          trade_record.price, profit, profit_ratio, last_total_profit + profit,
+                          trade_record.price, profit, profit_ratio, total_profit,
                           force_close_offset_price,
                           break_even_point_price,
                           max_loss,
@@ -235,8 +243,8 @@ def build_txn_detail_list(binanceKline: BinanceKline, invest_amt: Decimal, guara
                 total_handle_amt = last_handle_amt + trade_amt
                 total_handle_fee = last_handle_fee + calc_handle_fee(trade_record.price, trade_record.unit,
                                                                      trade_record.handle_fee_type)
-                profit = Decimal(0)
-                profit_ratio = Decimal(0)
+                profit = Decimal("0")
+                profit_ratio = Decimal("0")
             else:
                 # 買轉賣
                 if trade_record.unit > abs(last_handle_units):
@@ -245,31 +253,42 @@ def build_txn_detail_list(binanceKline: BinanceKline, invest_amt: Decimal, guara
                     total_handle_amt = abs(calc_trade_amt(trade_record.price, remain_unit))
                     total_handle_fee = abs(
                         calc_handle_fee(trade_record.price, remain_unit, trade_record.handle_fee_type))
-                    profit = calc_profit(trade_record.price, last_handle_amt, last_handle_fee, last_handle_units,
-                                         trade_record.handle_fee_type)
-                    profit_ratio = profit / last_trade_detail_guarantee
+                    sell_amt = last_handle_units * trade_record.price - calc_handle_fee(trade_record.price,
+                                                                                        last_handle_units,
+                                                                                        trade_record.handle_fee_type)
+                    buy_amt = last_handle_amt + last_handle_fee
+                    profit = (sell_amt - buy_amt).quantize(DECIMAL_PLACE_2, ROUND_FLOOR)
+                    # profit = calc_profit(trade_record.price, last_handle_amt, last_handle_fee, last_handle_units,
+                    #                      trade_record.handle_fee_type)
                 else:
                     # 買入單位<之前持有的空倉單位
                     total_handle_amt = last_handle_amt / last_handle_units * total_handle_units
                     total_handle_fee = last_handle_fee / last_handle_units * total_handle_units
-                    profit = calc_profit(trade_record.price, last_handle_amt / last_handle_units * trade_record.unit,
-                                         calc_handle_fee(last_handle_amt / last_handle_units, trade_record.unit,
-                                                         trade_record.handle_fee_type), trade_record.unit,
-                                         trade_record.handle_fee_type)
-                    profit_ratio = profit / ((last_handle_amt - total_handle_amt) / leverage_ratio).quantize(
-                        DECIMAL_PLACE_2, rounding=ROUND_CEILING)
+                    buy_amt = last_handle_amt - total_handle_amt + last_handle_fee - total_handle_fee
+                    handle_fee = calc_handle_fee(trade_record.price, trade_record.unit, trade_record.handle_fee_type)
+                    sell_amt = trade_record.price * trade_record.unit - handle_fee
+                    profit = (sell_amt - buy_amt).quantize(DECIMAL_PLACE_2, ROUND_FLOOR)
+                    # profit = calc_profit(trade_record.price, last_handle_amt / last_handle_units * trade_record.unit,
+                    #                      calc_handle_fee(last_handle_amt / last_handle_units, trade_record.unit,
+                    #                                      trade_record.handle_fee_type), trade_record.unit,
+                    #                      trade_record.handle_fee_type)
+                profit_ratio = profit / buy_amt / leverage
 
-            guarantee = (total_handle_amt / leverage_ratio).quantize(DECIMAL_PLACE_2, rounding=ROUND_CEILING)
-            acct_balance = invest_amt + guarantee_amt + (last_total_profit + profit)
+            total_profit = last_total_profit + profit
+            stock_cost = (total_handle_amt / leverage + total_handle_fee).quantize(DECIMAL_PLACE_2, ROUND_CEILING)
+            # 總投資額+累計獲利-庫存成本
+            acct_balance = invest_amt + total_profit - stock_cost
+
+            guarantee = (total_handle_amt / leverage).quantize(DECIMAL_PLACE_2, rounding=ROUND_CEILING)
             max_loss = calc_max_loss(binanceKline.high, binanceKline.low, total_handle_amt, total_handle_fee,
                                      total_handle_units,
                                      HandleFeeType.TAKER)
-            force_close_offset_price = calc_force_close_offset_price(-1 * (invest_amt + guarantee_amt),
+            force_close_offset_price = calc_force_close_offset_price(-1 * invest_amt,
                                                                      total_handle_amt,
                                                                      total_handle_fee,
                                                                      total_handle_units,
                                                                      HandleFeeType.TAKER)
-            break_even_point_price = calc_force_close_offset_price(Decimal(0),
+            break_even_point_price = calc_force_close_offset_price(Decimal("0"),
                                                                    total_handle_amt, total_handle_fee,
                                                                    total_handle_units)
             trade_detail.txn_detail_list.append(
@@ -286,8 +305,8 @@ def build_txn_detail_list(binanceKline: BinanceKline, invest_amt: Decimal, guara
                              HandleFeeType.TAKER)
 
         profit_ratio = None
-        if profit and last_trade_detail_guarantee:
-            profit_ratio = profit / last_trade_detail_guarantee
+        if profit and last_handle_amt:
+            profit_ratio = profit / last_handle_amt / leverage
 
         trade_detail.txn_detail_list.append(
             TxnDetail(current_date, last_handle_units, last_handle_amt, last_handle_fee,
@@ -298,7 +317,8 @@ def build_txn_detail_list(binanceKline: BinanceKline, invest_amt: Decimal, guara
                       trade_record))
 
 
-def check_is_force_close_offset(kline: BinanceKline, invest_amt: Decimal, guarantee_amt: Decimal,
+# TODO is function need to check
+def check_is_force_close_offset(kline: BinanceKline, invest_amt: Decimal,
                                 leverage_ratio: Decimal, trade_detail: TradeDetail):
     # 確認是否爆倉
     latest_txn_detail = trade_detail.txn_detail_list[len(trade_detail.txn_detail_list) - 1]
@@ -310,58 +330,16 @@ def check_is_force_close_offset(kline: BinanceKline, invest_amt: Decimal, guaran
     if (is_long_trade and kline.low < latest_txn_detail.force_close_offset_price) or (
             not is_long_trade and kline.high > latest_txn_detail.force_close_offset_price):
         trade_detail.txn_detail_list.append(
-            TxnDetail(kline.end_time, Decimal(0), Decimal(0), Decimal(0),
-                      Decimal(0),
-                      latest_txn_detail.force_close_offset_price, -1 * (invest_amt + guarantee_amt),
-                      Decimal(-100 * leverage_ratio), Decimal(0),
-                      Decimal(0), -1 * (invest_amt + guarantee_amt), Decimal(0),
+            TxnDetail(kline.end_time, Decimal("0"), Decimal("0"), Decimal("0"),
+                      Decimal("0"),
+                      latest_txn_detail.force_close_offset_price, -1 * invest_amt,
+                      Decimal(-100 * leverage_ratio), Decimal("0"),
+                      Decimal("0"), -1 * invest_amt, Decimal("0"), Decimal("0"),
                       TradeRecord(kline.end_time, TradeType.SELL if is_long_trade else TradeType.BUY,
                                   latest_txn_detail.force_close_offset_price,
                                   -1 * latest_txn_detail.units,
-                                  HandleFeeType.TAKER)))
+                                  HandleFeeType.TAKER, TradeReason(TradeReasonType.PASSIVE, "爆倉"))))
         return True
-
-
-# if __name__ == '__main__':
-#     tr1 = TradeRecord(datetime.now(), TradeType.BUY, Decimal(10000), Decimal(100), HandleFeeType.MAKER)
-#     tr2 = TradeRecord(datetime.now(), TradeType.BUY, Decimal(11000), Decimal(100), HandleFeeType.MAKER)
-#     tr3 = TradeRecord(datetime.now(), TradeType.SELL, Decimal(12000), Decimal(150), HandleFeeType.MAKER)
-#     tr4 = TradeRecord(datetime.now(), TradeType.SELL, Decimal(15000), Decimal(100), HandleFeeType.MAKER)
-#     tr5 = TradeRecord(datetime.now(), TradeType.BUY, Decimal(16000), Decimal(20), HandleFeeType.MAKER)
-#     tr6 = TradeRecord(datetime.now(), TradeType.BUY, Decimal(18000), Decimal(100), HandleFeeType.MAKER)
-#
-#     trade_detail = TradeDetail(False, False, [])
-#     build_txn_detail_list(
-#         BinanceKline(datetime.now(), Decimal(100), Decimal(100), Decimal(100), Decimal(100), Decimal(100),
-#                      datetime.now(), 100), Decimal(1000), Decimal(4000), Decimal(100), tr1, trade_detail)
-#     build_txn_detail_list(
-#         BinanceKline(datetime.now(), Decimal(100), Decimal(100), Decimal(100), Decimal(100), Decimal(100),
-#                      datetime.now(), 100), Decimal(1000), Decimal(4000), Decimal(100), tr2, trade_detail)
-#
-#     build_txn_detail_list(
-#         BinanceKline(datetime.now(), Decimal(100), Decimal(100), Decimal(100), Decimal(100), Decimal(100),
-#                      datetime.now(), 100), Decimal(1000), Decimal(4000), Decimal(100), None, trade_detail)
-#
-#     build_txn_detail_list(
-#         BinanceKline(datetime.now(), Decimal(100), Decimal(100), Decimal(100), Decimal(100), Decimal(100),
-#                      datetime.now(), 100), Decimal(1000), Decimal(4000), Decimal(100), tr3, trade_detail)
-#     build_txn_detail_list(
-#         BinanceKline(datetime.now(), Decimal(100), Decimal(100), Decimal(100), Decimal(100), Decimal(100),
-#                      datetime.now(), 100), Decimal(1000), Decimal(4000), Decimal(100), tr4, trade_detail)
-#
-#     build_txn_detail_list(
-#         BinanceKline(datetime.now(), Decimal(100), Decimal(100), Decimal(100), Decimal(100), Decimal(100),
-#                      datetime.now(), 100), Decimal(1000), Decimal(4000), Decimal(100), None, trade_detail)
-#
-#     build_txn_detail_list(
-#         BinanceKline(datetime.now(), Decimal(100), Decimal(100), Decimal(100), Decimal(100), Decimal(100),
-#                      datetime.now(), 100), Decimal(1000), Decimal(4000), Decimal(100), tr5, trade_detail)
-#
-#     build_txn_detail_list(
-#         BinanceKline(datetime.now(), Decimal(100), Decimal(100), Decimal(100), Decimal(100), Decimal(100),
-#                      datetime.now(), 100), Decimal(1000), Decimal(4000), Decimal(100), tr6, trade_detail)
-#
-#     print(trade_detail.txn_detail_list)
 
 
 def analyze_trading_strategy(df: pd.DataFrame, initial_capital: float, risk_free_rate: float = 0.02) -> pd.DataFrame:
@@ -503,3 +481,143 @@ def analyze_trading_strategy(df: pd.DataFrame, initial_capital: float, risk_free
     results_df_horizontal = results_series.to_frame().T
 
     return results_df_horizontal
+
+
+if __name__ == '__main__':
+    base_kline = BinanceKline(
+        start_time=datetime(2025, 1, 1, 0, 0),
+        open=Decimal("50000"),
+        high=Decimal("51000"),
+        low=Decimal("49000"),
+        close=Decimal("50500"),
+        vol=Decimal("1"),
+        end_time=datetime(2025, 1, 1, 0, 14, 59),
+        number_of_trade=100
+    )
+    invest_amt = Decimal("10000")
+    leverage = Decimal("10")
+
+    td = TradeDetail([])
+    trade_record = create_trade_record(datetime(2025, 1, 1, 0, 0), TradeType.BUY, Decimal("50000"), None,
+                                       Decimal("0.2"),
+                                       HandleFeeType.TAKER, TradeReason(TradeReasonType.ACTIVE, ""))
+    build_txn_detail_list(base_kline, invest_amt, leverage, trade_record, td)
+
+    trade_record = create_trade_record(datetime(2025, 1, 1, 0, 0), TradeType.BUY, Decimal("52000"), None,
+                                       Decimal("0.1"),
+                                       HandleFeeType.MAKER, TradeReason(TradeReasonType.ACTIVE, ""))
+    build_txn_detail_list(base_kline, invest_amt, leverage, trade_record, td)
+
+    trade_record = create_trade_record(datetime(2025, 1, 1, 0, 0), TradeType.SELL, Decimal("53000"), None,
+                                       Decimal("0.1"),
+                                       HandleFeeType.TAKER, TradeReason(TradeReasonType.ACTIVE, ""))
+    build_txn_detail_list(base_kline, invest_amt, leverage, trade_record, td)
+
+    trade_record = create_trade_record(datetime(2025, 1, 1, 0, 0), TradeType.SELL, Decimal("52000"), None,
+                                       Decimal("0.4"),
+                                       HandleFeeType.TAKER, TradeReason(TradeReasonType.ACTIVE, ""))
+    build_txn_detail_list(base_kline, invest_amt, leverage, trade_record, td)
+
+    trade_record = create_trade_record(datetime(2025, 1, 1, 0, 0), TradeType.SELL, Decimal("51000"), None,
+                                       Decimal("0.1"),
+                                       HandleFeeType.MAKER, TradeReason(TradeReasonType.ACTIVE, ""))
+    build_txn_detail_list(base_kline, invest_amt, leverage, trade_record, td)
+
+    trade_record = create_trade_record(datetime(2025, 1, 1, 0, 0), TradeType.BUY, Decimal("49000"), None,
+                                       Decimal("0.1"),
+                                       HandleFeeType.TAKER, TradeReason(TradeReasonType.ACTIVE, ""))
+    build_txn_detail_list(base_kline, invest_amt, leverage, trade_record, td)
+
+    trade_record = create_trade_record(datetime(2025, 1, 1, 0, 0), TradeType.BUY, Decimal("50000"), None,
+                                       Decimal("0.4"),
+                                       HandleFeeType.TAKER, TradeReason(TradeReasonType.ACTIVE, ""))
+    build_txn_detail_list(base_kline, invest_amt, leverage, trade_record, td)
+
+    trade_record = create_trade_record(datetime(2025, 1, 1, 0, 0), TradeType.SELL, Decimal("51000"), None,
+                                       Decimal("0.2"),
+                                       HandleFeeType.TAKER, TradeReason(TradeReasonType.ACTIVE, ""))
+    build_txn_detail_list(base_kline, invest_amt, leverage, trade_record, td)
+
+    result_list = [TxnDetail(date=datetime(2025, 1, 1, 0, 0), units=Decimal('0.2'), handle_amt=Decimal('10000.0'),
+                             handling_fee=Decimal('4.00'), guarantee_fee=Decimal('1000.00'),
+                             current_price=Decimal('50000'), profit=Decimal('0'), profit_ratio=Decimal('0'),
+                             total_profit=Decimal('0'), force_close_offset_price=Decimal('21'),
+                             break_even_point_price=Decimal('50041'), max_loss=Decimal('-207.92'),
+                             acct_balance=Decimal('8996.00'),
+                             trade_record=TradeRecord(date=datetime(2025, 1, 1, 0, 0),
+                                                      type=TradeType.BUY, price=Decimal('50000'), unit=Decimal('0.2'),
+                                                      handle_fee_type=HandleFeeType.TAKER,
+                                                      reason=TradeReason(trade_reason_type=TradeReasonType.ACTIVE,
+                                                                         desc='')))
+        , TxnDetail(date=datetime(2025, 1, 1, 0, 0), units=Decimal('0.3'), handle_amt=Decimal('15200.0'),
+                    handling_fee=Decimal('5.04'), guarantee_fee=Decimal('1520.00'), current_price=Decimal('52000'),
+                    profit=Decimal('0'), profit_ratio=Decimal('0'), total_profit=Decimal('0'),
+                    force_close_offset_price=Decimal('17358'), break_even_point_price=Decimal('50704'),
+                    max_loss=Decimal('-510.92'), acct_balance=Decimal('8474.96'),
+                    trade_record=TradeRecord(date=datetime(2025, 1, 1, 0, 0), type=TradeType.BUY,
+                                             price=Decimal('52000'), unit=Decimal('0.1'),
+                                             handle_fee_type=HandleFeeType.MAKER,
+                                             reason=TradeReason(trade_reason_type=TradeReasonType.ACTIVE, desc='')))
+        , TxnDetail(date=datetime(2025, 1, 1, 0, 0), units=Decimal('0.2'),
+                    handle_amt=Decimal('10133.33333333333333333333333'), handling_fee=Decimal('3.36'),
+                    guarantee_fee=Decimal('1013.34'), current_price=Decimal('53000'), profit=Decimal('229.53'),
+                    profit_ratio=Decimal('0.004528695748251895424148834857'), total_profit=Decimal('229.53'),
+                    force_close_offset_price=Decimal('684'), break_even_point_price=Decimal('50704'),
+                    max_loss=Decimal('-340.62'), acct_balance=Decimal('9212.83'),
+                    trade_record=TradeRecord(date=datetime(2025, 1, 1, 0, 0), type=TradeType.SELL,
+                                             price=Decimal('53000'), unit=Decimal('0.1'),
+                                             handle_fee_type=HandleFeeType.TAKER,
+                                             reason=TradeReason(trade_reason_type=TradeReasonType.ACTIVE, desc='')))
+        , TxnDetail(date=datetime(2025, 1, 1, 0, 0), units=Decimal('-0.2'), handle_amt=Decimal('10400.0'),
+                    handling_fee=Decimal('4.16'), guarantee_fee=Decimal('1040.00'), current_price=Decimal('52000'),
+                    profit=Decimal('259.14'), profit_ratio=Decimal('0.002556454964932680216559772287'),
+                    total_profit=Decimal('488.67'), force_close_offset_price=Decimal('101938'),
+                    break_even_point_price=Decimal('51958'), max_loss=Decimal('0'), acct_balance=Decimal('9444.51'),
+                    trade_record=TradeRecord(date=datetime(2025, 1, 1, 0, 0), type=TradeType.SELL,
+                                             price=Decimal('52000'), unit=Decimal('0.4'),
+                                             handle_fee_type=HandleFeeType.TAKER,
+                                             reason=TradeReason(trade_reason_type=TradeReasonType.ACTIVE, desc='')))
+        , TxnDetail(date=datetime(2025, 1, 1, 0, 0), units=Decimal('-0.3'), handle_amt=Decimal('15500.0'),
+                    handling_fee=Decimal('5.18'), guarantee_fee=Decimal('1550.00'), current_price=Decimal('51000'),
+                    profit=Decimal('0'), profit_ratio=Decimal('0'), total_profit=Decimal('488.67'),
+                    force_close_offset_price=Decimal('84948'), break_even_point_price=Decimal('51628'),
+                    max_loss=Decimal('0'), acct_balance=Decimal('8933.49'),
+                    trade_record=TradeRecord(date=datetime(2025, 1, 1, 0, 0), type=TradeType.SELL,
+                                             price=Decimal('51000'), unit=Decimal('0.1'),
+                                             handle_fee_type=HandleFeeType.MAKER,
+                                             reason=TradeReason(trade_reason_type=TradeReasonType.ACTIVE, desc='')))
+        , TxnDetail(date=datetime(2025, 1, 1, 0, 0), units=Decimal('-0.2'),
+                    handle_amt=Decimal('10333.33333333333333333333333'),
+                    handling_fee=Decimal('3.453333333333333333333333334'), guarantee_fee=Decimal('1033.34'),
+                    current_price=Decimal('49000'), profit=Decimal('256.07'),
+                    profit_ratio=Decimal('0.004964489049443909500390975885'), total_profit=Decimal('744.74'),
+                    force_close_offset_price=Decimal('101608'), break_even_point_price=Decimal('51628'),
+                    max_loss=Decimal('0'), acct_balance=Decimal('9707.95'),
+                    trade_record=TradeRecord(date=datetime(2025, 1, 1, 0, 0), type=TradeType.BUY,
+                                             price=Decimal('49000'), unit=Decimal('0.1'),
+                                             handle_fee_type=HandleFeeType.TAKER,
+                                             reason=TradeReason(trade_reason_type=TradeReasonType.ACTIVE, desc='')))
+        , TxnDetail(date=datetime(2025, 1, 1, 0, 0), units=Decimal('0.2'), handle_amt=Decimal('10000.0'),
+                    handling_fee=Decimal('4.00'), guarantee_fee=Decimal('1000.00'), current_price=Decimal('50000'),
+                    profit=Decimal('325.88'), profit_ratio=Decimal('0.003154731710339326303887363648'),
+                    total_profit=Decimal('1070.62'), force_close_offset_price=Decimal('21'),
+                    break_even_point_price=Decimal('50041'), max_loss=Decimal('-207.92'),
+                    acct_balance=Decimal('10066.62'),
+                    trade_record=TradeRecord(date=datetime(2025, 1, 1, 0, 0), type=TradeType.BUY,
+                                             price=Decimal('50000'), unit=Decimal('0.4'),
+                                             handle_fee_type=HandleFeeType.TAKER,
+                                             reason=TradeReason(trade_reason_type=TradeReasonType.ACTIVE, desc='')))
+        , TxnDetail(date=datetime(2025, 1, 1, 0, 0), units=Decimal('0.0'), handle_amt=Decimal('0.0'),
+                    handling_fee=Decimal('0.00'), guarantee_fee=Decimal('0.00'), current_price=Decimal('51000'),
+                    profit=Decimal('191.92'), profit_ratio=Decimal('0.00191843262694922031187524990'),
+                    total_profit=Decimal('1262.54'), force_close_offset_price=None, break_even_point_price=None,
+                    max_loss=Decimal('0'), acct_balance=Decimal('11262.54'),
+                    trade_record=TradeRecord(date=datetime(2025, 1, 1, 0, 0), type=TradeType.SELL,
+                                             price=Decimal('51000'), unit=Decimal('0.2'),
+                                             handle_fee_type=HandleFeeType.TAKER,
+                                             reason=TradeReason(trade_reason_type=TradeReasonType.ACTIVE, desc='')))
+                   ]
+
+    print(result_list[0] == td.txn_detail_list[0])
+    print(result_list[0])
+    print(td.txn_detail_list[0])

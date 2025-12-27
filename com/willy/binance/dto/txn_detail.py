@@ -16,8 +16,8 @@ class TxnDetail:
     profit: Decimal
     profit_ratio: Decimal
     total_profit: Decimal
-    force_close_offset_price: Decimal
-    break_even_point_price: Decimal
+    force_close_offset_price: Decimal | None
+    break_even_point_price: Decimal | None
     max_loss: Decimal
     acct_balance: Decimal
     trade_record: TradeRecord
