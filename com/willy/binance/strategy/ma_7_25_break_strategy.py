@@ -27,7 +27,7 @@ def trade_if_not_trade_twice(now_trade_record, last_td):
     return now_trade_record
 
 
-class MaIndexSwitch(IndexSwitch):
+class Ma725BreakIndexSwitch(IndexSwitch):
     RSI = 1
     # ADX = 2
     ATR = 3
@@ -38,15 +38,15 @@ class MaIndexSwitch(IndexSwitch):
     # FAKE_BREAK_RSI = 7
 
 
-class MovingAverageStrategy(TradingStrategy):
+class Ma725BreakStrategy(TradingStrategy):
     def is_meet_tech_idx_with_switch(self, row) -> bool:
-        if self.get_trade_index_switch_status(MaIndexSwitch.KEEP):
+        if self.get_trade_index_switch_status(Ma725BreakIndexSwitch.KEEP):
             if row.ma7 < row.ma25 and row.is_ma25_keep_grow:
                 return False
             if row.ma7 > row.ma25 and row.is_ma25_keep_fall:
                 return False
 
-        if self.get_trade_index_switch_status(MaIndexSwitch.RSI):
+        if self.get_trade_index_switch_status(Ma725BreakIndexSwitch.RSI):
             # if row.ma7 < row.ma25 and row.rsi < 30:
             #     return False
             if row.ma7 > row.ma25 and row.rsi < 60:
@@ -58,11 +58,11 @@ class MovingAverageStrategy(TradingStrategy):
         #         return False
 
         # MA25 趨勢過濾：開關打開且 MA25 沒有持續增長時攔截
-        if self.get_trade_index_switch_status(MaIndexSwitch.ATR):
+        if self.get_trade_index_switch_status(Ma725BreakIndexSwitch.ATR):
             if row.atr < (row.atr_mean * 0.8):
                 return False
 
-        if self.get_trade_index_switch_status(MaIndexSwitch.TIME_FILTER):
+        if self.get_trade_index_switch_status(Ma725BreakIndexSwitch.TIME_FILTER):
             return self.is_trade_allowed_time(row.end_time)
 
         return True
@@ -83,7 +83,7 @@ class MovingAverageStrategy(TradingStrategy):
 
     @property
     def strategy_idx_switches(self) -> Type[IndexSwitch]:
-        return MaIndexSwitch
+        return Ma725BreakIndexSwitch
 
     def get_invest_amt(self):
         if self.last_td is not None and self.last_td.acct_balance > 0:
@@ -104,7 +104,7 @@ class MovingAverageStrategy(TradingStrategy):
             return trade_record
 
         # 如果是假突破或假跌破(5K內又跌/漲回去)，把買/賣的賣/買回來
-        if self.get_trade_index_switch_status(MaIndexSwitch.FAKE_BREAK):
+        if self.get_trade_index_switch_status(Ma725BreakIndexSwitch.FAKE_BREAK):
             trade_record = self.fake_break(lastest_row)
             if trade_record:
                 return trade_record

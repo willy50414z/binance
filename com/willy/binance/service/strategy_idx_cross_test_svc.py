@@ -6,7 +6,7 @@ from typing import Type
 import pandas as pd
 
 from com.willy.binance.config import const
-from com.willy.binance.strategy.moving_average_strategy import MovingAverageStrategy
+from com.willy.binance.strategy.ma_7_25_break_strategy import Ma725BreakStrategy
 
 
 def evaluate_performance(analysis_df, initial_capital):
@@ -88,7 +88,7 @@ def run_experiment_wrapper(task_args):
     return stats
 
 
-def start(strategy_type: Type[MovingAverageStrategy], strategy_args: tuple):
+def start(strategy_type: Type[Ma725BreakStrategy], strategy_args: tuple):
     # 取得 Enum 類別
     temp_strat = strategy_type(*strategy_args)
     switches = list(temp_strat.strategy_idx_switches)

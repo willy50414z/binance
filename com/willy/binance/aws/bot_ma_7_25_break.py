@@ -7,13 +7,13 @@ from com.willy.binance.config.config_util import config_util
 from com.willy.binance.enums.binance_product import BinanceProduct
 from com.willy.binance.service import trade_svc, telegram_svc
 from com.willy.binance.service.binance_svc import BinanceSvc
-from com.willy.binance.strategy.moving_average_strategy import MovingAverageStrategy
+from com.willy.binance.strategy.ma_7_25_break_strategy import Ma725BreakStrategy
 from com.willy.binance.util import type_util
 from com.willy.binance.websocket import websocket_listener
 
-maStrategy = MovingAverageStrategy("ma_with_ma25_2504_061", type_util.str_to_datetime("2025-04-01T00:00:00Z"),
-                                   type_util.str_to_datetime("2025-11-30T00:00:00Z"), 50000
-                                   , BinanceProduct.BTCUSDT, 20, {"level_amt_change": 1, "dca_levels": 5})
+maStrategy = Ma725BreakStrategy("ma_with_ma25_2504_061", type_util.str_to_datetime("2025-04-01T00:00:00Z"),
+                                type_util.str_to_datetime("2025-11-30T00:00:00Z"), 50000
+                                , BinanceProduct.BTCUSDT, 20, {"level_amt_change": 1, "dca_levels": 5})
 config = config_util("linebot")
 line_user_id = config.get("userid_willy")
 
