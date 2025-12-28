@@ -22,6 +22,11 @@ def datetime_to_str(dt: datetime, format="%Y%m%d"):
     return dt.strftime(format)
 
 
+def datetime_to_str_ms(dt: datetime, format="%Y%m%d"):
+    ms = int(dt.microsecond / 1000)
+    return dt.strftime(format) + f".{ms:03d}"
+
+
 def str_to_date(str):
     return datetime.strptime(str, "%Y%m%d").replace(tzinfo=ZoneInfo("UTC"))
 

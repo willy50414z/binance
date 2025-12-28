@@ -30,7 +30,8 @@ class TradingStrategy(ABC):
                  end_time: datetime,
                  initial_capital: Decimal,
                  product: BinanceProduct,
-                 leverage: Decimal, other_args=None, cool_down_period: CoolDownPeriodSettingDto = None):
+                 leverage: Decimal, other_args=None, cool_down_period: CoolDownPeriodSettingDto = None,
+                 generate_analyze_info: bool = True):
         if other_args is None:
             other_args = {}
         self.last_td = None
@@ -46,6 +47,7 @@ class TradingStrategy(ABC):
         self.trade_detail = TradeDetail([])
         self.date_idx_map = {}
         self.cool_down_period = cool_down_period
+        self.generate_analyze_info = generate_analyze_info
 
     cross_test_config = None
 
@@ -329,23 +331,22 @@ class TradingStrategy(ABC):
                                                self.leverage,
                                                trade_record,
                                                self.trade_detail)
+        if self.generate_analyze_info:
+            # 製圖
+            analysis_df = self.build_analysis_df(backtest_df)
+            # chart_dataframe = self.build_chart_dataframe(history_dataframe)
+            chart_service.export_trade_point_chart(self.test_name, analysis_df, {
+                "start_time": type_util.datetime_to_str(self.start_time, "%Y-%m-%d %H:%M:%S")
+                , "end_time": type_util.datetime_to_str(self.end_time, "%Y-%m-%d %H:%M:%S")
+                , "initial_capital": float(self.initial_capital)
+                , "product": self.product
+                , "leverage": self.leverage
+                , "other_args": self.other_args})
 
-        # 製圖
-        analysis_df = self.build_analysis_df(backtest_df)
-        # chart_dataframe = self.build_chart_dataframe(history_dataframe)
-        chart_service.export_trade_point_chart(self.test_name, analysis_df, {
-            "start_time": type_util.datetime_to_str(self.start_time, "%Y-%m-%d %H:%M:%S")
-            , "end_time": type_util.datetime_to_str(self.end_time, "%Y-%m-%d %H:%M:%S")
-            , "initial_capital": float(self.initial_capital)
-            , "product": self.product
-            , "leverage": self.leverage
-            , "other_args": self.other_args})
+            # 交易明細
+            strategy_optimization_report_dir = f"{const.PROJECT_DIR}/report"
+            os.makedirs(strategy_optimization_report_dir, exist_ok=True)
+            self.build_trade_detail_analysis_df().to_csv(
+                f"{strategy_optimization_report_dir}/trade_detail.csv", index=False)
 
-        # 交易明細
-        strategy_optimization_report_dir = f"{const.PROJECT_DIR}/report"
-        os.makedirs(strategy_optimization_report_dir, exist_ok=True)
-        self.build_trade_detail_analysis_df().to_csv(
-            f"{strategy_optimization_report_dir}/trade_detail.csv", index=False)
-        print(f"\n✅ trade_detail已匯出至 trade_detail.csv")
-
-        return analysis_df
+            return analysis_df

@@ -1,21 +1,25 @@
-from datetime import datetime
-from decimal import ROUND_HALF_UP
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 
-from com.willy.binance.config import const
 from com.willy.binance.config.config_util import config_util
+from com.willy.binance.dto.cool_down_period_setting_dto import CoolDownPeriodSettingDto
+from com.willy.binance.dto.trade_detail import TradeDetail
 from com.willy.binance.enums.binance_product import BinanceProduct
-from com.willy.binance.service import trade_svc, telegram_svc
+from com.willy.binance.service import telegram_svc
 from com.willy.binance.service.binance_svc import BinanceSvc
 from com.willy.binance.strategy.ma_7_25_break_strategy import Ma725BreakStrategy
 from com.willy.binance.util import type_util
-from com.willy.binance.websocket import websocket_listener
 
-maStrategy = Ma725BreakStrategy("ma_with_ma25_2504_061", type_util.str_to_datetime("2025-04-01T00:00:00Z"),
-                                type_util.str_to_datetime("2025-11-30T00:00:00Z"), 50000
-                                , BinanceProduct.BTCUSDT, 20, {"level_amt_change": 1, "dca_levels": 5})
+maStrategy = Ma725BreakStrategy("bot_ma_7_25_break",
+                                type_util.str_to_datetime("2025-01-01T00:00:00Z"),
+                                type_util.str_to_datetime("2025-12-21T00:00:00Z"), Decimal("6000")
+                                , BinanceProduct.BTCUSDT, Decimal("20"), {}, CoolDownPeriodSettingDto(2, 96),
+                                generate_analyze_info=False)
+
 config = config_util("linebot")
 line_user_id = config.get("userid_willy")
+binance_svc = BinanceSvc(is_demo=False, is_testnet=False)
 
 
 def handle_socket_message(msg):
@@ -56,41 +60,82 @@ def handle_socket_message(msg):
         print(f"收到未處理的訊息: {msg}")
 
 
+# def expect_place_order_price_range(history_kline_df: DataFrame):
+#     last_index = history_kline.index[-1]
+#     history_kline.at[last_index, 'close'] = 999
+
+
+def next_quarter_hour(dt: datetime) -> datetime:
+    # 將分鐘取模 15，得到距離下個點的偏移分鐘
+    minutes_to_add = (15 - dt.minute % 15) % 15
+    if minutes_to_add == 0:
+        minutes_to_add = 15  # 已在點上時，跳到下一個點
+    result = dt + timedelta(minutes=minutes_to_add)
+    # 將秒與微秒歸零
+    return result.replace(second=0, microsecond=0).astimezone(timezone.utc)
+
+
+def previous_quarter_hour(dt: datetime) -> datetime:
+    # 先把分鐘向下取整到最近的 15 的倍數
+    minute_down = (dt.minute // 15) * 15
+    # 先把秒、微秒清零，並把時間回到該格點
+    dt_down = dt.replace(minute=minute_down, second=0, microsecond=0)
+
+    # 判斷是否剛好就在格點上（且沒有任何偏移）
+    is_exact_grid = (dt.minute % 15 == 0) and (dt.second == 0) and (dt.microsecond == 0)
+
+    if is_exact_grid:
+        # 如果原本就在格點上，回到上一個格點
+        dt_down -= timedelta(minutes=15)
+
+    return dt_down.astimezone(timezone.utc)
+
+
+def dt_second_or_ms_zero(d: datetime) -> bool:
+    return d.second == 0 and d.microsecond == 0
+
+
 def lambda_handler(event, context):
-    now_utc_time = datetime.now().astimezone(ZoneInfo("UTC"))
+    now_utc_time = datetime.now()
 
-    # 先撈歷史價格
-    binance_svc = BinanceSvc(is_demo=False, is_testnet=False)
-    history_kline = binance_svc.get_klines(BinanceProduct.BTCUSDT, maStrategy.tickets_interval,
-                                           datetime.now() - maStrategy.get_lookback_timedelta(), datetime.now())
+    # # 先撈歷史價格
+    # history_kline_df = binance_svc.get_klines(BinanceProduct.BTCUSDT, maStrategy.tickets_interval,
+    #                                           datetime.now() - maStrategy.get_lookback_timedelta(), datetime.now())
 
-    # 監聽socket，能即時取得最新價格
-    websocket_listener.listen_kline_socket(handle_socket_message, BinanceProduct.BTCUSDT, maStrategy.tickets_interval)
+    # 預計算出可下單區間
 
     # 條件判斷
+    # last_row = history_kline_df.iloc[-1]
+    trade_time = previous_quarter_hour(datetime.now().astimezone(ZoneInfo("UTC")))  # FIXME
+    # trade_time = type_util.str_to_date_min("202512101045")
+
+    maStrategy.start_time = trade_time
+    maStrategy.end_time = trade_time
+    maStrategy.trade_detail = TradeDetail([])  # FIXME 從dynodb抓
+    maStrategy.run_backtest()
+    if maStrategy.trade_detail.txn_detail_list is not None and len(maStrategy.trade_detail.txn_detail_list) > 0 and \
+            maStrategy.trade_detail.txn_detail_list[-1].date == trade_time:
+        # 需要做交易
+        trade_record = maStrategy.trade_detail.txn_detail_list[-1].trade_record
+        telegram_svc.push_message(
+            message=f"pg_start_time[{type_util.datetime_to_str_ms(now_utc_time, "%Y/%m/%d %H:%M:%S")}]\r\n"
+                    f"trade_time[{type_util.datetime_to_str_ms(trade_time, "%Y/%m/%d %H:%M:%S")}]\r\n"
+                    f"msg_time[{type_util.datetime_to_str_ms(datetime.now(), "%Y/%m/%d %H:%M:%S")}]\r\n"
+                    f"===TradeRecord===\r\n"
+                    f"date[{trade_record.date}]\r\nproduct[{maStrategy.product.name}]\r\nside[{trade_record.type.name}]"
+                    f"\r\nunit[{trade_record.unit}]\r\nprice[{trade_record.price}]"
+                    f"\r\nreason_type[{trade_record.reason.trade_reason_type.name}]\r\nreason[{trade_record.reason.desc}]")
+    else:
+        telegram_svc.push_message(
+            message=f"program_start_time[{type_util.datetime_to_str_ms(now_utc_time, "%Y/%m/%d %H:%M:%S")}]\r\n"
+                    f"trade_time[{type_util.datetime_to_str_ms(trade_time, "%Y/%m/%d %H:%M:%S")}]\r\n"
+                    f"msg_time[{type_util.datetime_to_str_ms(datetime.now(), "%Y/%m/%d %H:%M:%S")}]\r\n"
+                    f"no need to trade")
 
     # 發通知
 
-    # now_utc_time = type_util.str_to_date_min("202512061800")
-    trade_record, df = maStrategy.get_trade_record_by_date(now_utc_time)
-    print(
-        f"{type_util.datetime_to_str(datetime.now(), "%Y/%m/%d %H:%M:%S")} start check ma_7_25_break trade record, now_utc_time[{type_util.datetime_to_str(now_utc_time, "%Y/%m/%d %H:%M:%S")}]trade_record[{trade_record}]df[{df[len(df) - 2:]}]")
-    # service.create_future_order(maStrategy.product, trade_record.type,
-    #                             OrderType.MARKET if trade_record.handle_fee_type == HandleFeeType.TAKER else OrderType.LIMIT,
-    #                             trade_record.unit,
-    #                             str(trade_record.price.quantize(const.DECIMAL_PLACE_2, rounding=ROUND_HALF_UP)))
-    if trade_record:
-        trade_svc.build_txn_detail_list_df(df.iloc[-1], maStrategy.invest_amt, maStrategy.guarantee_amt,
-                                           maStrategy.leverage,
-                                           trade_record,
-                                           maStrategy.trade_detail)
-        trade_detail_log = ""
-        for txn_detail in maStrategy.trade_detail.txn_detail_list:
-            trade_detail_log = f"{trade_detail_log}\r\nunits[{txn_detail.units}]handle_amt[{txn_detail.handle_amt}]profit[{txn_detail.profit}]total_profit[{txn_detail.total_profit}]acct_balance[{txn_detail.acct_balance}]\r\n"
-        telegram_svc.push_message(
-            message=f"UTC time[{type_util.datetime_to_str(now_utc_time, "%Y/%m/%d %H:%M:%S")}]\r\n===TradeRecord===\r\ndate[{trade_record.date}]product[{maStrategy.product.name}]\r\nside[{trade_record.type.name}]\r\nunit[{trade_record.unit}]\r\nprice[{trade_record.price.quantize(const.DECIMAL_PLACE_2, rounding=ROUND_HALF_UP)}]reason[{trade_record.reason}]\r\n===TradeDetail===\r\n{trade_detail_log}")
-        telegram_svc.push_message(
-            message=f"{df[len(df) - 2:]}")
+    # # 監聽socket，能即時取得最新價格
+    # websocket_listener.listen_kline_socket(handle_socket_message, BinanceProduct.BTCUSDT, maStrategy.tickets_interval)
 
     return {
         'statusCode': 200,

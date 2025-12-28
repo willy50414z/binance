@@ -236,6 +236,7 @@ class BinanceSvc:
         df = df.apply(parse_datetime_row, axis=1)
         df = df.astype(
             {'open': float, 'high': float, 'low': float, 'close': float, 'vol': float, 'number_of_trade': float})
+        df = df.set_index('start_time', drop=False).sort_index()
         return df
 
     def create_test_spot_order(self, binance_product: BinanceProduct, trade_type: TradeType, order_type: OrderType,
