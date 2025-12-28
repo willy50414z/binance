@@ -1,14 +1,12 @@
 from enum import Enum
 
-from binance import SIDE_BUY, SIDE_SELL
-
 
 class TradeType(Enum):
-    def __init__(self, value, bianace_type):
-        # 注意：Enum 成員的 value 必須作為第一個參數傳入
-        self._value_ = value
-        # 儲存額外的屬性
-        self.bianace_type = bianace_type
+    BUY = 1, "BUY"
+    SELL = 2, "SELL"
 
-    BUY = (1, SIDE_BUY)
-    SELL = (2, SIDE_SELL)
+    def __new__(cls, value, binance_type):
+        obj = object.__new__(cls)
+        obj._value_ = value
+        obj.binance_type = binance_type
+        return obj

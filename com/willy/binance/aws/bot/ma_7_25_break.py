@@ -1,9 +1,11 @@
+import json
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from com.willy.binance.dto.cool_down_period_setting_dto import CoolDownPeriodSettingDto
 from com.willy.binance.dto.trade_detail import TradeDetail
+from com.willy.binance.encoder.json_encoder import EnhanceJSONEncoder
 from com.willy.binance.enums.binance_product import BinanceProduct
 from com.willy.binance.service import telegram_svc
 from com.willy.binance.strategy.ma_7_25_break_strategy import Ma725BreakStrategy
@@ -118,7 +120,9 @@ def lambda_handler(event, context):
                     f"===TradeRecord===\r\n"
                     f"date[{trade_record.date}]\r\nproduct[{maStrategy.product.name}]\r\nside[{trade_record.type.name}]"
                     f"\r\nunit[{trade_record.unit}]\r\nprice[{trade_record.price}]"
-                    f"\r\nreason_type[{trade_record.reason.trade_reason_type.name}]\r\nreason[{trade_record.reason.desc}]")
+                    f"\r\nreason_type[{trade_record.reason.trade_reason_type.name}]\r\nreason[{trade_record.reason.desc}]"
+                    f"\r\n===Trade_Detail==="
+                    f"\r\n[{json.dumps(maStrategy.trade_detail, cls=EnhanceJSONEncoder, ensure_ascii=False)}]")
     else:
         telegram_svc.push_message(
             message=f"pg_start_time[{type_util.datetime_to_str_ms(now_utc_time, "%Y/%m/%d %H:%M:%S")}]\r\n"

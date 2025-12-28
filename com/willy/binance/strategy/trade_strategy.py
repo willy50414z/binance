@@ -8,6 +8,7 @@ from typing import List
 
 import pandas as pd
 
+from com.willy.binance.aws.service import s3_svc
 from com.willy.binance.config import const
 from com.willy.binance.config.const import DECIMAL_PLACE_2
 from com.willy.binance.dto.cool_down_period_setting_dto import CoolDownPeriodSettingDto
@@ -48,6 +49,9 @@ class TradingStrategy(ABC):
         self.date_idx_map = {}
         self.cool_down_period = cool_down_period
         self.is_aws_profile = is_aws_profile
+        # if is_aws_profile:
+        #     self.s3_svc = s3_svc.get_backtest_svc(self.test_name)
+        self.s3_svc = s3_svc.get_backtest_svc(self.test_name)
 
     cross_test_config = None
 
@@ -293,6 +297,7 @@ class TradingStrategy(ABC):
                 self.binance_svc.get_klines(self.product, self.tickets_interval,
                                             self.start_time - look_back_timedelta,
                                             self.end_time)
+            self.trade_detail = self.s3_svc.get_trade_detail(self.test_name)
         else:
             full_back_test_df = \
                 self.binance_svc.get_historical_klines_df(self.product, self.tickets_interval,
@@ -342,6 +347,10 @@ class TradingStrategy(ABC):
                                                self.leverage,
                                                trade_record,
                                                self.trade_detail)
+
+            if self.is_aws_profile and trade_record is not None:
+                self.s3_svc.write_trade_detail(self.test_name, self.trade_detail)
+
         if not self.is_aws_profile:
             # 製圖
             analysis_df = self.build_analysis_df(backtest_df)
