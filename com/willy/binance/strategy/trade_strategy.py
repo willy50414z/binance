@@ -311,7 +311,6 @@ class TradingStrategy(ABC):
                     break
 
             if self.is_in_cool_down_period(start_time):
-                logging.warn(f"{start_time} in cool period, stop trade")
                 continue
 
             current_idx = full_back_test_df.index.get_loc(start_time)
