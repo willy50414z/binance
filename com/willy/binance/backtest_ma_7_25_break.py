@@ -6,9 +6,10 @@ from com.willy.binance.strategy.ma_7_25_break_strategy import Ma725BreakStrategy
 from com.willy.binance.util import type_util
 
 if __name__ == '__main__':
-    strategy = Ma725BreakStrategy("ma_with_ma25_0101_1130_no_stop_profit_backtest_mappp",
-                                  type_util.str_to_datetime("2025-01-01T00:00:00Z"),
-                                  type_util.str_to_datetime("2025-12-21T00:00:00Z"), Decimal("6000")
+    year = 2025
+    strategy = Ma725BreakStrategy(f"bot_ma_7_25_break_{str(year)}",
+                                  type_util.str_to_datetime(f"{str(year)}-01-01T00:00:00Z"),
+                                  type_util.str_to_datetime(f"{str(year)}-12-21T00:00:00Z"), Decimal("6000")
                                   , BinanceProduct.BTCUSDT, Decimal("20"), {}, CoolDownPeriodSettingDto(2, 96))
 
     strategy.cross_test_config = {Ma725BreakIndexSwitch.KEEP: True, Ma725BreakIndexSwitch.FAKE_BREAK: True

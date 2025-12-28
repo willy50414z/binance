@@ -222,7 +222,6 @@ class BinanceSvc:
         except Exception as e:
             raise Exception(f"取得委託單失敗: {e}")
 
-    @functools.lru_cache(maxsize=10)
     def get_klines(self, binance_product: BinanceProduct, kline_interval=Client.KLINE_INTERVAL_1DAY,
                    start_time: datetime = type_util.str_to_date("20250101"),
                    end_time: datetime = type_util.str_to_date("20250105")):

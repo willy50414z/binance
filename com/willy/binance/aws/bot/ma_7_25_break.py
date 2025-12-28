@@ -2,12 +2,10 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
-from com.willy.binance.config.config_util import config_util
 from com.willy.binance.dto.cool_down_period_setting_dto import CoolDownPeriodSettingDto
 from com.willy.binance.dto.trade_detail import TradeDetail
 from com.willy.binance.enums.binance_product import BinanceProduct
 from com.willy.binance.service import telegram_svc
-from com.willy.binance.service.binance_svc import BinanceSvc
 from com.willy.binance.strategy.ma_7_25_break_strategy import Ma725BreakStrategy
 from com.willy.binance.util import type_util
 
@@ -15,11 +13,7 @@ maStrategy = Ma725BreakStrategy("bot_ma_7_25_break",
                                 type_util.str_to_datetime("2025-01-01T00:00:00Z"),
                                 type_util.str_to_datetime("2025-12-21T00:00:00Z"), Decimal("6000")
                                 , BinanceProduct.BTCUSDT, Decimal("20"), {}, CoolDownPeriodSettingDto(2, 96),
-                                generate_analyze_info=False)
-
-config = config_util("linebot")
-line_user_id = config.get("userid_willy")
-binance_svc = BinanceSvc(is_demo=False, is_testnet=False)
+                                is_aws_profile=True)
 
 
 def handle_socket_message(msg):
@@ -127,7 +121,7 @@ def lambda_handler(event, context):
                     f"\r\nreason_type[{trade_record.reason.trade_reason_type.name}]\r\nreason[{trade_record.reason.desc}]")
     else:
         telegram_svc.push_message(
-            message=f"program_start_time[{type_util.datetime_to_str_ms(now_utc_time, "%Y/%m/%d %H:%M:%S")}]\r\n"
+            message=f"pg_start_time[{type_util.datetime_to_str_ms(now_utc_time, "%Y/%m/%d %H:%M:%S")}]\r\n"
                     f"trade_time[{type_util.datetime_to_str_ms(trade_time, "%Y/%m/%d %H:%M:%S")}]\r\n"
                     f"msg_time[{type_util.datetime_to_str_ms(datetime.now(), "%Y/%m/%d %H:%M:%S")}]\r\n"
                     f"no need to trade")

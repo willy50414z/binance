@@ -14,4 +14,4 @@ COPY com /var/task/com
 COPY requirements.txt /var/task/requirements.txt
 RUN pip install --target /var/task -r requirements.txt
 
-CMD [ "com.willy.binance.ma_7_25_break.lambda_handler" ]
+CMD [ "com.willy.binance.aws.bot.ma_7_25_break.lambda_handler" ]

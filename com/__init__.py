@@ -1,6 +1,5 @@
 # your_project/__init__.py
 import logging
-import os
 from logging.handlers import RotatingFileHandler
 
 
@@ -8,14 +7,14 @@ def _setup_logging(log_path: str = "/log/binance.log",
                    level: int = logging.INFO,
                    max_bytes: int = 5 * 1024 * 1024,
                    backup_count: int = 5) -> None:
-    # 確保日誌目錄存在
-    log_dir = os.path.dirname(log_path)
-    try:
-        if log_dir:
-            os.makedirs(log_dir, exist_ok=True)
-    except Exception as e:
-        # 若無法建立目錄，至少輸出到 Console
-        print(f"Warning: could not create log directory {log_dir}: {e}")
+    # # 確保日誌目錄存在
+    # log_dir = os.path.dirname(log_path)
+    # try:
+    #     if log_dir:
+    #         os.makedirs(log_dir, exist_ok=True)
+    # except Exception as e:
+    #     # 若無法建立目錄，至少輸出到 Console
+    #     print(f"Warning: could not create log directory {log_dir}: {e}")
 
     logger = logging.getLogger()
     logger.setLevel(level)

@@ -31,7 +31,7 @@ class TradingStrategy(ABC):
                  initial_capital: Decimal,
                  product: BinanceProduct,
                  leverage: Decimal, other_args=None, cool_down_period: CoolDownPeriodSettingDto = None,
-                 generate_analyze_info: bool = True):
+                 is_aws_profile: bool = False):
         if other_args is None:
             other_args = {}
         self.last_td = None
@@ -47,7 +47,7 @@ class TradingStrategy(ABC):
         self.trade_detail = TradeDetail([])
         self.date_idx_map = {}
         self.cool_down_period = cool_down_period
-        self.generate_analyze_info = generate_analyze_info
+        self.is_aws_profile = is_aws_profile
 
     cross_test_config = None
 
@@ -279,14 +279,25 @@ class TradingStrategy(ABC):
                 return False
 
     def run_backtest(self):
+        logging.info(
+            f"start run backtest,test_name[{self.test_name}]start_time[{self.start_time}]end_time[{self.end_time}]"
+            f"initial_capital[{self.initial_capital}]product[{self.product.name}]leverage[{self.leverage}]"
+            f"is_aws_profile[{self.is_aws_profile}]cool_down_period[{self.cool_down_period}]")
+
         # 先計算技術指標需要提前撈的資料
         look_back_timedelta = self.get_lookback_timedelta()
 
         # 獲取回測時間
-        full_back_test_df = \
-            self.binance_svc.get_historical_klines_df(self.product, self.tickets_interval,
-                                                      self.start_time - look_back_timedelta,
-                                                      self.end_time)
+        if self.is_aws_profile:
+            full_back_test_df = \
+                self.binance_svc.get_klines(self.product, self.tickets_interval,
+                                            self.start_time - look_back_timedelta,
+                                            self.end_time)
+        else:
+            full_back_test_df = \
+                self.binance_svc.get_historical_klines_df(self.product, self.tickets_interval,
+                                                          self.start_time - look_back_timedelta,
+                                                          self.end_time)
 
         # 計算技術指標
         self.append_tech_ides(full_back_test_df)
@@ -331,7 +342,7 @@ class TradingStrategy(ABC):
                                                self.leverage,
                                                trade_record,
                                                self.trade_detail)
-        if self.generate_analyze_info:
+        if not self.is_aws_profile:
             # 製圖
             analysis_df = self.build_analysis_df(backtest_df)
             # chart_dataframe = self.build_chart_dataframe(history_dataframe)
@@ -347,6 +358,6 @@ class TradingStrategy(ABC):
             strategy_optimization_report_dir = f"{const.PROJECT_DIR}/report"
             os.makedirs(strategy_optimization_report_dir, exist_ok=True)
             self.build_trade_detail_analysis_df().to_csv(
-                f"{strategy_optimization_report_dir}/trade_detail.csv", index=False)
+                f"{strategy_optimization_report_dir}/{self.test_name}_trade_detail.csv", index=False)
 
             return analysis_df
