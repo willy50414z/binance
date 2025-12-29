@@ -116,19 +116,21 @@ def lambda_handler(event, context):
         telegram_svc.push_message(
             message=f"pg_start_time[{type_util.datetime_to_str_ms(now_utc_time, "%Y/%m/%d %H:%M:%S")}]\r\n"
                     f"trade_time[{type_util.datetime_to_str_ms(trade_time, "%Y/%m/%d %H:%M:%S")}]\r\n"
-                    f"msg_time[{type_util.datetime_to_str_ms(datetime.now(), "%Y/%m/%d %H:%M:%S")}]\r\n"
-                    f"===TradeRecord===\r\n"
+                    f"msg_time[{type_util.datetime_to_str_ms(datetime.now(), "%Y/%m/%d %H:%M:%S")}]\r\n")
+        telegram_svc.push_message(
+            message=f"===TradeRecord===\r\n"
                     f"date[{trade_record.date}]\r\nproduct[{maStrategy.product.name}]\r\nside[{trade_record.type.name}]"
                     f"\r\nunit[{trade_record.unit}]\r\nprice[{trade_record.price}]"
-                    f"\r\nreason_type[{trade_record.reason.trade_reason_type.name}]\r\nreason[{trade_record.reason.desc}]"
-                    f"\r\n===Trade_Detail==="
-                    f"\r\n[{json.dumps(maStrategy.trade_detail, cls=EnhanceJSONEncoder, ensure_ascii=False)}]")
-    else:
+                    f"\r\nreason_type[{trade_record.reason.trade_reason_type.name}]\r\nreason[{trade_record.reason.desc}]")
         telegram_svc.push_message(
-            message=f"pg_start_time[{type_util.datetime_to_str_ms(now_utc_time, "%Y/%m/%d %H:%M:%S")}]\r\n"
-                    f"trade_time[{type_util.datetime_to_str_ms(trade_time, "%Y/%m/%d %H:%M:%S")}]\r\n"
-                    f"msg_time[{type_util.datetime_to_str_ms(datetime.now(), "%Y/%m/%d %H:%M:%S")}]\r\n"
-                    f"no need to trade")
+            message=f"\r\n===Trade_Detail==="
+                    f"\r\n[{json.dumps(maStrategy.trade_detail, cls=EnhanceJSONEncoder, ensure_ascii=False)}]")
+    # else:
+    #     telegram_svc.push_message(
+    #         message=f"pg_start_time[{type_util.datetime_to_str_ms(now_utc_time, "%Y/%m/%d %H:%M:%S")}]\r\n"
+    #                 f"trade_time[{type_util.datetime_to_str_ms(trade_time, "%Y/%m/%d %H:%M:%S")}]\r\n"
+    #                 f"msg_time[{type_util.datetime_to_str_ms(datetime.now(), "%Y/%m/%d %H:%M:%S")}]\r\n"
+    #                 f"no need to trade")
 
     # 發通知
 
