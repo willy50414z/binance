@@ -80,7 +80,7 @@ class S3Service:
             # 針對檔案不存在的特殊處理 (Optional)
             if e.response['Error']['Code'] == "NoSuchKey":
                 logging.error(f"錯誤：找不到檔案 {key}")
-                return {}
+                return None
             logging.error(f"S3 讀取失敗: {e}")
             raise
         except json.JSONDecodeError as e:
@@ -97,6 +97,8 @@ class S3Service:
     def get_trade_detail(self, bot_name):
         trade_detail_key = self.aws_config.get(f"s3.bucket.file.name.{bot_name}.trade_detail")
         trade_detail_json = self.read_json(trade_detail_key)
+        if trade_detail_json is None:
+            return TradeDetail([])
         # trade_detail_dict = json.loads(json.dumps(trade_detail_json), object_hook=s3_json_decoder)
         config = Config(type_hooks={
             datetime: datetime.fromisoformat,
@@ -117,7 +119,8 @@ class S3Service:
 if __name__ == "__main__":
     # 1. 實例化服務
     s3_svc = S3Service(bucket_name="binance.bot.s3")
-
+    loaded_data = s3_svc.read_json("bot_ma_7_25_break.trade_detail")
+    print(loaded_data)
     # 2. 準備資料
     target_key = "data/users/123.json"
     sample_data = {
@@ -132,7 +135,7 @@ if __name__ == "__main__":
         s3_svc.write_json(sample_data, target_key)
 
         # 讀取
-        loaded_data = s3_svc.read_json(target_key)
+        loaded_data = s3_svc.read_json("bot_ma_7_25_break.trade_detail")
         print("讀取到的資料:", loaded_data)
     except Exception as e:
         print(f"執行過程中發生錯誤: {e}")
