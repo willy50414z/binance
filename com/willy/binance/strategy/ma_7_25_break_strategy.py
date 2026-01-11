@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime
 from decimal import Decimal
 from typing import List, Type
@@ -42,14 +43,17 @@ class Ma725BreakStrategy(TradingStrategy):
     def is_meet_tech_idx_with_switch(self, row) -> bool:
         if self.get_trade_index_switch_status(Ma725BreakIndexSwitch.KEEP):
             if row.ma7 < row.ma25 and row.is_ma25_keep_grow:
+                logging.debug(f"[is_meet_tech_idx_with_switch] fail in KEEP grow")
                 return False
             if row.ma7 > row.ma25 and row.is_ma25_keep_fall:
+                logging.debug(f"[is_meet_tech_idx_with_switch] fail in KEEP fall")
                 return False
 
         if self.get_trade_index_switch_status(Ma725BreakIndexSwitch.RSI):
             # if row.ma7 < row.ma25 and row.rsi < 30:
             #     return False
             if row.ma7 > row.ma25 and row.rsi < 60:
+                logging.debug(f"[is_meet_tech_idx_with_switch] fail in rsi fall")
                 return False
 
             # ADX 過濾：開關打開且趨勢太弱 (ADX < 25) 時攔截
@@ -60,9 +64,11 @@ class Ma725BreakStrategy(TradingStrategy):
         # MA25 趨勢過濾：開關打開且 MA25 沒有持續增長時攔截
         if self.get_trade_index_switch_status(Ma725BreakIndexSwitch.ATR):
             if row.atr < (row.atr_mean * 0.8):
+                logging.debug(f"[is_meet_tech_idx_with_switch] fail in ATR")
                 return False
 
         if self.get_trade_index_switch_status(Ma725BreakIndexSwitch.TIME_FILTER):
+            logging.debug(f"[is_meet_tech_idx_with_switch] fail in TIME_FILTER")
             return self.is_trade_allowed_time(row.end_time)
 
         return True
@@ -130,6 +136,10 @@ class Ma725BreakStrategy(TradingStrategy):
 
     def trade_if_cross_ma(self, last_td, row):
         # 1. MA7 / MA25 超過20期沒有交叉 > 交叉後確立做多/空方向
+        logging.debug(
+            f"start_time[{row.start_time}]last_ma7_and_ma25_rel[{row.last_ma7_and_ma25_rel}]row.ma7[{row.ma7}]row.ma25[{row.ma25}]"
+            f"row.is_ma25_keep_grow[{row.is_ma25_keep_grow}]row.rsi[{row.rsi}]ATR[{row.atr}]"
+            f"row.atr_mean[{row.atr_mean}]")
         if abs(row.last_ma7_and_ma25_rel) >= 20:
             if row.last_ma7_and_ma25_rel > 0:
                 # ma7在ma25上面持續超過20期

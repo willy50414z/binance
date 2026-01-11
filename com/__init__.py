@@ -7,7 +7,7 @@ from com.willy.binance.config import const
 
 
 def _setup_logging(log_path: str = f"{const.PROJECT_DIR}/log/binance.log",
-                   level: int = logging.INFO,
+                   level: int = logging.DEBUG,
                    max_bytes: int = 5 * 1024 * 1024,
                    backup_count: int = 5) -> None:
     # 確保日誌目錄存在

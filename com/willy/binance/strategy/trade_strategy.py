@@ -340,6 +340,7 @@ class TradingStrategy(ABC):
             self.check_break_position(prev_row)
 
             # 決策是否交易
+            logging.debug(f"last 2 get_trade_record_df rows data[{get_trade_record_df[len(get_trade_record_df) - 2:]}]")
             trade_record = self.get_trade_record_by_date(get_trade_record_df)
 
             # 紀錄交易紀錄
