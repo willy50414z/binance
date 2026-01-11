@@ -263,6 +263,7 @@ class TradingStrategy(ABC):
 
         # 還在冷靜期
         if self.cool_down_period.next_trade_time is not None and start_time < self.cool_down_period.next_trade_time:
+            logging.debug(f"in_cool_down_period,next_trade_time[{self.cool_down_period.next_trade_time}]")
             return True
 
         if len(self.trade_detail.txn_detail_list) > self.cool_down_period.loss_count:
@@ -310,6 +311,7 @@ class TradingStrategy(ABC):
         backtest_df = full_back_test_df.loc[self.start_time: self.end_time].copy()
 
         backtest_start_time_list = backtest_df.index
+        logging.debug(f"backtest_start_time_list[{backtest_start_time_list}]")
         row_idx = 0
         # 逐日回測
         for start_time in backtest_start_time_list:
@@ -320,7 +322,7 @@ class TradingStrategy(ABC):
                 self.trade_detail.txn_detail_list) > 0 else None
             # if row_idx % 1000 == 0:
             #     print(f"finish {row_idx} / {backtest_start_time_list.shape[0]}")
-
+            logging.debug(f"last_td[{self.last_td}]")
             # 帳戶餘額已歸零須停止回測
             if len(self.trade_detail.txn_detail_list) > 0:
                 last_balance = self.trade_detail.txn_detail_list[-1].acct_balance
@@ -329,12 +331,15 @@ class TradingStrategy(ABC):
                     break
 
             if self.is_in_cool_down_period(start_time):
+                logging.debug(f"in_cool_down_period")
                 continue
 
             current_idx = full_back_test_df.index.get_loc(start_time)
             get_trade_record_df = full_back_test_df.iloc[:current_idx]
             prev_row = get_trade_record_df.iloc[-1]
             current_row = backtest_df.loc[start_time]
+            if self.last_td:
+                self.cool_down_period = self.last_td.cool_down_period
 
             # 確認有沒有爆倉
             self.check_break_position(prev_row)
@@ -347,7 +352,7 @@ class TradingStrategy(ABC):
             trade_svc.build_txn_detail_list_df(current_row, self.initial_capital,
                                                self.leverage,
                                                trade_record,
-                                               self.trade_detail)
+                                               self.trade_detail, self.cool_down_period)
 
             if self.is_aws_profile and trade_record is not None:
                 self.s3_svc.write_trade_detail(self.test_name, self.trade_detail)

@@ -7,6 +7,7 @@ import pandas as pd
 from com.willy.binance.config.config_util import config_util
 from com.willy.binance.config.const import DECIMAL_PLACE_2
 from com.willy.binance.dto.binance_kline import BinanceKline
+from com.willy.binance.dto.cool_down_period_setting_dto import CoolDownPeriodSettingDto
 from com.willy.binance.dto.trade_detail import TradeDetail
 from com.willy.binance.dto.trade_record import TradeRecord
 from com.willy.binance.dto.txn_detail import TxnDetail
@@ -123,7 +124,8 @@ def create_close_trade_record(date: datetime, price: Decimal, txn_detail: TxnDet
 
 def build_txn_detail_list_df(row, invest_amt: Decimal,
                              leverage_ratio: Decimal,
-                             trade_record: TradeRecord | None, trade_detail: TradeDetail):
+                             trade_record: TradeRecord | None, trade_detail: TradeDetail,
+                             cool_down_period: CoolDownPeriodSettingDto):
     if trade_record is None:
         return
     return build_txn_detail_list(
@@ -132,12 +134,13 @@ def build_txn_detail_list_df(row, invest_amt: Decimal,
                      Decimal(str(row.vol)), row.end_time,
                      int(row.number_of_trade)), invest_amt, leverage_ratio,
         trade_record,
-        trade_detail)
+        trade_detail, cool_down_period)
 
 
 def build_txn_detail_list(binanceKline: BinanceKline, invest_amt: Decimal,
                           leverage: Decimal,
-                          trade_record: TradeRecord | None, trade_detail: TradeDetail):
+                          trade_record: TradeRecord | None, trade_detail: TradeDetail,
+                          cool_down_period: CoolDownPeriodSettingDto):
     """
 
     :param binanceKline:
@@ -299,7 +302,7 @@ def build_txn_detail_list(binanceKline: BinanceKline, invest_amt: Decimal,
                           break_even_point_price,
                           max_loss,
                           acct_balance,
-                          trade_record))
+                          trade_record, cool_down_period))
     else:
         profit = calc_profit(current_price, last_handle_amt, last_handle_fee, last_handle_units,
                              HandleFeeType.TAKER)
@@ -314,7 +317,7 @@ def build_txn_detail_list(binanceKline: BinanceKline, invest_amt: Decimal,
                       current_price, profit, profit_ratio, last_total_profit + profit,
                       last_trade_detail_force_close_offset_price,
                       last_trade_break_even_point_price, last_trade_max_loss, last_trade_detail_acct_balance,
-                      trade_record))
+                      trade_record, cool_down_period))
 
 
 # TODO is function need to check
