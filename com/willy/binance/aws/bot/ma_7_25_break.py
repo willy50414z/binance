@@ -9,6 +9,7 @@ from com.willy.binance.encoder.json_encoder import EnhanceJSONEncoder
 from com.willy.binance.enums.binance_product import BinanceProduct
 from com.willy.binance.service import telegram_svc
 from com.willy.binance.strategy.ma_7_25_break_strategy import Ma725BreakStrategy
+from com.willy.binance.strategy.trade_strategy import TradingStrategy
 from com.willy.binance.util import type_util
 
 maStrategy = Ma725BreakStrategy("bot_ma_7_25_break",
@@ -91,6 +92,14 @@ def dt_second_or_ms_zero(d: datetime) -> bool:
     return d.second == 0 and d.microsecond == 0
 
 
+def test_strategy(trade_time: datetime) -> TradingStrategy:
+    maStrategy.start_time = trade_time
+    maStrategy.end_time = trade_time
+    maStrategy.trade_detail = TradeDetail([])
+    maStrategy.run_backtest()
+    return maStrategy
+
+
 def lambda_handler(event, context):
     now_utc_time = datetime.now()
 
@@ -103,12 +112,9 @@ def lambda_handler(event, context):
     # 條件判斷
     # last_row = history_kline_df.iloc[-1]
     trade_time = previous_quarter_hour(datetime.now().astimezone(ZoneInfo("UTC")))  # FIXME
-    # trade_time = type_util.str_to_date_min("202512101045")
 
-    maStrategy.start_time = trade_time
-    maStrategy.end_time = trade_time
-    maStrategy.trade_detail = TradeDetail([])  # FIXME 從dynodb抓
-    maStrategy.run_backtest()
+    maStrategy = test_strategy(trade_time)
+
     if maStrategy.trade_detail.txn_detail_list is not None and len(maStrategy.trade_detail.txn_detail_list) > 0 and \
             maStrategy.trade_detail.txn_detail_list[-1].date == trade_time:
         # 需要做交易
@@ -125,18 +131,6 @@ def lambda_handler(event, context):
         telegram_svc.push_message(
             message=f"\r\n===Trade_Detail==="
                     f"\r\n[{json.dumps(maStrategy.trade_detail, cls=EnhanceJSONEncoder, ensure_ascii=False)}]")
-    # else:
-    #     telegram_svc.push_message(
-    #         message=f"pg_start_time[{type_util.datetime_to_str_ms(now_utc_time, "%Y/%m/%d %H:%M:%S")}]\r\n"
-    #                 f"trade_time[{type_util.datetime_to_str_ms(trade_time, "%Y/%m/%d %H:%M:%S")}]\r\n"
-    #                 f"msg_time[{type_util.datetime_to_str_ms(datetime.now(), "%Y/%m/%d %H:%M:%S")}]\r\n"
-    #                 f"no need to trade")
-
-    # 發通知
-
-    # # 監聽socket，能即時取得最新價格
-    # websocket_listener.listen_kline_socket(handle_socket_message, BinanceProduct.BTCUSDT, maStrategy.tickets_interval)
-
     return {
         'statusCode': 200,
         'body': 'Hello from Lambda Container!'
@@ -144,4 +138,4 @@ def lambda_handler(event, context):
 
 
 if __name__ == '__main__':
-    lambda_handler(1, 1)
+    test_strategy(type_util.str_to_datetime(f"2026-01-27T06:15:00Z"))

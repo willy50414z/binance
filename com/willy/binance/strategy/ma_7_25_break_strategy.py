@@ -18,6 +18,7 @@ from com.willy.binance.strategy.trade_strategy import TradingStrategy, IndexSwit
 def trade_if_not_trade_twice(now_trade_record, last_td):
     if now_trade_record:
         if last_td is not None and last_td.trade_record.type == now_trade_record.type and last_td.units != 0:
+            logging.debug("[strategy]meet trade_twice at same side, will stop trading")
             # 上一次是同向交易 => 直接平倉 因為同向交易發生時，大多會虧損
             return trade_svc.create_close_trade_record(now_trade_record.date,
                                                        now_trade_record.price, last_td,
@@ -70,7 +71,7 @@ class Ma725BreakStrategy(TradingStrategy):
         if self.get_trade_index_switch_status(Ma725BreakIndexSwitch.TIME_FILTER):
             logging.debug(f"[is_meet_tech_idx_with_switch] fail in TIME_FILTER")
             return self.is_trade_allowed_time(row.end_time)
-
+        logging.debug(f"[is_meet_tech_idx_with_switch] check success")
         return True
 
     @property
@@ -102,17 +103,20 @@ class Ma725BreakStrategy(TradingStrategy):
 
         trade_record = self.trade_if_cross_ma(self.last_td, lastest_row)
         if trade_record:
+            logging.debug("[strategy] trade in trade_if_cross_ma")
             return trade_record
 
         # 3. 獲利時，MA7/MA25連續3期逐漸變小且<100點 => 停利
         trade_record = self.get_stop_loss_trade_record(self.last_td, lastest_row)
         if trade_record:
+            logging.debug("[strategy] trade in stop_loss_trade")
             return trade_record
 
         # 如果是假突破或假跌破(5K內又跌/漲回去)，把買/賣的賣/買回來
         if self.get_trade_index_switch_status(Ma725BreakIndexSwitch.FAKE_BREAK):
             trade_record = self.fake_break(lastest_row)
             if trade_record:
+                logging.debug("[strategy] trade in fake_break")
                 return trade_record
 
         return None
@@ -136,11 +140,8 @@ class Ma725BreakStrategy(TradingStrategy):
 
     def trade_if_cross_ma(self, last_td, row):
         # 1. MA7 / MA25 超過20期沒有交叉 > 交叉後確立做多/空方向
-        logging.debug(
-            f"start_time[{row.start_time}]last_ma7_and_ma25_rel[{row.last_ma7_and_ma25_rel}]row.ma7[{row.ma7}]row.ma25[{row.ma25}]"
-            f"row.is_ma25_keep_grow[{row.is_ma25_keep_grow}]row.rsi[{row.rsi}]ATR[{row.atr}]"
-            f"row.atr_mean[{row.atr_mean}]")
-        if abs(row.last_ma7_and_ma25_rel) >= 20:
+        ma7_and_ma25_rel_criteria = 20
+        if abs(row.last_ma7_and_ma25_rel) >= ma7_and_ma25_rel_criteria:
             if row.last_ma7_and_ma25_rel > 0:
                 # ma7在ma25上面持續超過20期
                 if row.ma7 < row.ma25 and self.is_meet_tech_idx_with_switch(row):
@@ -194,6 +195,9 @@ class Ma725BreakStrategy(TradingStrategy):
 
                     # 6. 連續2次符合條件且方向相同，直接平倉
                     return trade_if_not_trade_twice(now_trade_record, last_td)
+        else:
+            logging.debug(
+                f"[strategy]ma7 and ma25 diff is less than {ma7_and_ma25_rel_criteria}, abs(row.last_ma7_and_ma25_rel)[{abs(row.last_ma7_and_ma25_rel)}]")
 
     def get_stop_loss_trade_record(self, last_td, row):
         if last_td:
@@ -216,13 +220,18 @@ class Ma725BreakStrategy(TradingStrategy):
                 #     reset_available_trade_amt(trade_level_list)
             elif unrealize_profit and unrealize_profit < 0:
                 # 5. 虧損超過1000點 => 停損
+                # 做多
                 if last_td.units > 0 and (last_td.handle_amt / last_td.units - Decimal(str(row.low))) > 1000:
+                    logging.debug("[strategy]stop loss")
                     return trade_svc.create_close_trade_record(row.start_time, round(
                         last_td.handle_amt / last_td.units, 2) - 1000, last_td,
                                                                reason=TradeReason(
                                                                    TradeReasonType.PASSIVE,
                                                                    "停損"))
+
+                # 做空
                 if last_td.units < 0 and (Decimal(str(row.high)) + last_td.handle_amt / last_td.units) > 1000:
+                    logging.debug("[strategy]stop loss")
                     return trade_svc.create_close_trade_record(row.start_time, round(
                         last_td.handle_amt / last_td.units * -1, 2) + 1000, last_td,
                                                                reason=TradeReason(

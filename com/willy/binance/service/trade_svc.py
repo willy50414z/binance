@@ -237,7 +237,7 @@ def build_txn_detail_list(binanceKline: BinanceKline, invest_amt: Decimal,
                           break_even_point_price,
                           max_loss,
                           acct_balance,
-                          trade_record))
+                          trade_record, cool_down_period))
         elif trade_record.type == TradeType.SELL:
             total_handle_units = last_handle_units - trade_record.unit
             trade_amt = calc_trade_amt(trade_record.price, trade_record.unit)
@@ -497,49 +497,50 @@ if __name__ == '__main__':
         end_time=datetime(2025, 1, 1, 0, 14, 59),
         number_of_trade=100
     )
+    cool_down_period_setting = CoolDownPeriodSettingDto(2, 96)
     invest_amt = Decimal("10000")
     leverage = Decimal("10")
 
     td = TradeDetail([])
-    trade_record = create_trade_record(datetime(2025, 1, 1, 0, 0), TradeType.BUY, Decimal("50000"), None,
+    trade_record = create_trade_record(datetime(2025, 1, 1, 0, 0), TradeType.BUY, 50000, None,
                                        Decimal("0.2"),
                                        HandleFeeType.TAKER, TradeReason(TradeReasonType.ACTIVE, ""))
-    build_txn_detail_list(base_kline, invest_amt, leverage, trade_record, td)
+    build_txn_detail_list(base_kline, invest_amt, leverage, trade_record, td, cool_down_period_setting)
 
-    trade_record = create_trade_record(datetime(2025, 1, 1, 0, 0), TradeType.BUY, Decimal("52000"), None,
+    trade_record = create_trade_record(datetime(2025, 1, 1, 0, 0), TradeType.BUY, 52000, None,
                                        Decimal("0.1"),
                                        HandleFeeType.MAKER, TradeReason(TradeReasonType.ACTIVE, ""))
-    build_txn_detail_list(base_kline, invest_amt, leverage, trade_record, td)
+    build_txn_detail_list(base_kline, invest_amt, leverage, trade_record, td, cool_down_period_setting)
 
-    trade_record = create_trade_record(datetime(2025, 1, 1, 0, 0), TradeType.SELL, Decimal("53000"), None,
+    trade_record = create_trade_record(datetime(2025, 1, 1, 0, 0), TradeType.SELL, 53000, None,
                                        Decimal("0.1"),
                                        HandleFeeType.TAKER, TradeReason(TradeReasonType.ACTIVE, ""))
-    build_txn_detail_list(base_kline, invest_amt, leverage, trade_record, td)
+    build_txn_detail_list(base_kline, invest_amt, leverage, trade_record, td, cool_down_period_setting)
 
-    trade_record = create_trade_record(datetime(2025, 1, 1, 0, 0), TradeType.SELL, Decimal("52000"), None,
+    trade_record = create_trade_record(datetime(2025, 1, 1, 0, 0), TradeType.SELL, 52000, None,
                                        Decimal("0.4"),
                                        HandleFeeType.TAKER, TradeReason(TradeReasonType.ACTIVE, ""))
-    build_txn_detail_list(base_kline, invest_amt, leverage, trade_record, td)
+    build_txn_detail_list(base_kline, invest_amt, leverage, trade_record, td, cool_down_period_setting)
 
-    trade_record = create_trade_record(datetime(2025, 1, 1, 0, 0), TradeType.SELL, Decimal("51000"), None,
+    trade_record = create_trade_record(datetime(2025, 1, 1, 0, 0), TradeType.SELL, 51000, None,
                                        Decimal("0.1"),
                                        HandleFeeType.MAKER, TradeReason(TradeReasonType.ACTIVE, ""))
-    build_txn_detail_list(base_kline, invest_amt, leverage, trade_record, td)
+    build_txn_detail_list(base_kline, invest_amt, leverage, trade_record, td, cool_down_period_setting)
 
-    trade_record = create_trade_record(datetime(2025, 1, 1, 0, 0), TradeType.BUY, Decimal("49000"), None,
+    trade_record = create_trade_record(datetime(2025, 1, 1, 0, 0), TradeType.BUY, 49000, None,
                                        Decimal("0.1"),
                                        HandleFeeType.TAKER, TradeReason(TradeReasonType.ACTIVE, ""))
-    build_txn_detail_list(base_kline, invest_amt, leverage, trade_record, td)
+    build_txn_detail_list(base_kline, invest_amt, leverage, trade_record, td, cool_down_period_setting)
 
-    trade_record = create_trade_record(datetime(2025, 1, 1, 0, 0), TradeType.BUY, Decimal("50000"), None,
+    trade_record = create_trade_record(datetime(2025, 1, 1, 0, 0), TradeType.BUY, 50000, None,
                                        Decimal("0.4"),
                                        HandleFeeType.TAKER, TradeReason(TradeReasonType.ACTIVE, ""))
-    build_txn_detail_list(base_kline, invest_amt, leverage, trade_record, td)
+    build_txn_detail_list(base_kline, invest_amt, leverage, trade_record, td, cool_down_period_setting)
 
-    trade_record = create_trade_record(datetime(2025, 1, 1, 0, 0), TradeType.SELL, Decimal("51000"), None,
+    trade_record = create_trade_record(datetime(2025, 1, 1, 0, 0), TradeType.SELL, 51000, None,
                                        Decimal("0.2"),
                                        HandleFeeType.TAKER, TradeReason(TradeReasonType.ACTIVE, ""))
-    build_txn_detail_list(base_kline, invest_amt, leverage, trade_record, td)
+    build_txn_detail_list(base_kline, invest_amt, leverage, trade_record, td, cool_down_period_setting)
 
     result_list = [TxnDetail(date=datetime(2025, 1, 1, 0, 0), units=Decimal('0.2'), handle_amt=Decimal('10000.0'),
                              handling_fee=Decimal('4.00'), guarantee_fee=Decimal('1000.00'),
@@ -551,7 +552,8 @@ if __name__ == '__main__':
                                                       type=TradeType.BUY, price=Decimal('50000'), unit=Decimal('0.2'),
                                                       handle_fee_type=HandleFeeType.TAKER,
                                                       reason=TradeReason(trade_reason_type=TradeReasonType.ACTIVE,
-                                                                         desc='')))
+                                                                         desc='')),
+                             cool_down_period=cool_down_period_setting)
         , TxnDetail(date=datetime(2025, 1, 1, 0, 0), units=Decimal('0.3'), handle_amt=Decimal('15200.0'),
                     handling_fee=Decimal('5.04'), guarantee_fee=Decimal('1520.00'), current_price=Decimal('52000'),
                     profit=Decimal('0'), profit_ratio=Decimal('0'), total_profit=Decimal('0'),
@@ -560,7 +562,8 @@ if __name__ == '__main__':
                     trade_record=TradeRecord(date=datetime(2025, 1, 1, 0, 0), type=TradeType.BUY,
                                              price=Decimal('52000'), unit=Decimal('0.1'),
                                              handle_fee_type=HandleFeeType.MAKER,
-                                             reason=TradeReason(trade_reason_type=TradeReasonType.ACTIVE, desc='')))
+                                             reason=TradeReason(trade_reason_type=TradeReasonType.ACTIVE, desc='')),
+                    cool_down_period=cool_down_period_setting)
         , TxnDetail(date=datetime(2025, 1, 1, 0, 0), units=Decimal('0.2'),
                     handle_amt=Decimal('10133.33333333333333333333333'), handling_fee=Decimal('3.36'),
                     guarantee_fee=Decimal('1013.34'), current_price=Decimal('53000'), profit=Decimal('229.53'),
@@ -570,7 +573,8 @@ if __name__ == '__main__':
                     trade_record=TradeRecord(date=datetime(2025, 1, 1, 0, 0), type=TradeType.SELL,
                                              price=Decimal('53000'), unit=Decimal('0.1'),
                                              handle_fee_type=HandleFeeType.TAKER,
-                                             reason=TradeReason(trade_reason_type=TradeReasonType.ACTIVE, desc='')))
+                                             reason=TradeReason(trade_reason_type=TradeReasonType.ACTIVE, desc='')),
+                    cool_down_period=cool_down_period_setting)
         , TxnDetail(date=datetime(2025, 1, 1, 0, 0), units=Decimal('-0.2'), handle_amt=Decimal('10400.0'),
                     handling_fee=Decimal('4.16'), guarantee_fee=Decimal('1040.00'), current_price=Decimal('52000'),
                     profit=Decimal('259.14'), profit_ratio=Decimal('0.002556454964932680216559772287'),
@@ -579,7 +583,8 @@ if __name__ == '__main__':
                     trade_record=TradeRecord(date=datetime(2025, 1, 1, 0, 0), type=TradeType.SELL,
                                              price=Decimal('52000'), unit=Decimal('0.4'),
                                              handle_fee_type=HandleFeeType.TAKER,
-                                             reason=TradeReason(trade_reason_type=TradeReasonType.ACTIVE, desc='')))
+                                             reason=TradeReason(trade_reason_type=TradeReasonType.ACTIVE, desc='')),
+                    cool_down_period=cool_down_period_setting)
         , TxnDetail(date=datetime(2025, 1, 1, 0, 0), units=Decimal('-0.3'), handle_amt=Decimal('15500.0'),
                     handling_fee=Decimal('5.18'), guarantee_fee=Decimal('1550.00'), current_price=Decimal('51000'),
                     profit=Decimal('0'), profit_ratio=Decimal('0'), total_profit=Decimal('488.67'),
@@ -588,7 +593,8 @@ if __name__ == '__main__':
                     trade_record=TradeRecord(date=datetime(2025, 1, 1, 0, 0), type=TradeType.SELL,
                                              price=Decimal('51000'), unit=Decimal('0.1'),
                                              handle_fee_type=HandleFeeType.MAKER,
-                                             reason=TradeReason(trade_reason_type=TradeReasonType.ACTIVE, desc='')))
+                                             reason=TradeReason(trade_reason_type=TradeReasonType.ACTIVE, desc='')),
+                    cool_down_period=cool_down_period_setting)
         , TxnDetail(date=datetime(2025, 1, 1, 0, 0), units=Decimal('-0.2'),
                     handle_amt=Decimal('10333.33333333333333333333333'),
                     handling_fee=Decimal('3.453333333333333333333333334'), guarantee_fee=Decimal('1033.34'),
@@ -599,7 +605,8 @@ if __name__ == '__main__':
                     trade_record=TradeRecord(date=datetime(2025, 1, 1, 0, 0), type=TradeType.BUY,
                                              price=Decimal('49000'), unit=Decimal('0.1'),
                                              handle_fee_type=HandleFeeType.TAKER,
-                                             reason=TradeReason(trade_reason_type=TradeReasonType.ACTIVE, desc='')))
+                                             reason=TradeReason(trade_reason_type=TradeReasonType.ACTIVE, desc='')),
+                    cool_down_period=cool_down_period_setting)
         , TxnDetail(date=datetime(2025, 1, 1, 0, 0), units=Decimal('0.2'), handle_amt=Decimal('10000.0'),
                     handling_fee=Decimal('4.00'), guarantee_fee=Decimal('1000.00'), current_price=Decimal('50000'),
                     profit=Decimal('325.88'), profit_ratio=Decimal('0.003154731710339326303887363648'),
@@ -609,7 +616,8 @@ if __name__ == '__main__':
                     trade_record=TradeRecord(date=datetime(2025, 1, 1, 0, 0), type=TradeType.BUY,
                                              price=Decimal('50000'), unit=Decimal('0.4'),
                                              handle_fee_type=HandleFeeType.TAKER,
-                                             reason=TradeReason(trade_reason_type=TradeReasonType.ACTIVE, desc='')))
+                                             reason=TradeReason(trade_reason_type=TradeReasonType.ACTIVE, desc='')),
+                    cool_down_period=cool_down_period_setting)
         , TxnDetail(date=datetime(2025, 1, 1, 0, 0), units=Decimal('0.0'), handle_amt=Decimal('0.0'),
                     handling_fee=Decimal('0.00'), guarantee_fee=Decimal('0.00'), current_price=Decimal('51000'),
                     profit=Decimal('191.92'), profit_ratio=Decimal('0.00191843262694922031187524990'),
@@ -618,7 +626,8 @@ if __name__ == '__main__':
                     trade_record=TradeRecord(date=datetime(2025, 1, 1, 0, 0), type=TradeType.SELL,
                                              price=Decimal('51000'), unit=Decimal('0.2'),
                                              handle_fee_type=HandleFeeType.TAKER,
-                                             reason=TradeReason(trade_reason_type=TradeReasonType.ACTIVE, desc='')))
+                                             reason=TradeReason(trade_reason_type=TradeReasonType.ACTIVE, desc='')),
+                    cool_down_period=cool_down_period_setting)
                    ]
 
     print(result_list[0] == td.txn_detail_list[0])

@@ -188,7 +188,9 @@ class TradingStrategy(ABC):
                                                                                    reason=TradeReason(
                                                                                        TradeReasonType.PASSIVE,
                                                                                        "爆倉")),
-                                               self.trade_detail)
+                                               self.trade_detail, self.cool_down_period)
+            return True
+        return False
 
     def get_required_buffer_ticks(self, tech_idx_type_list: list[TechIdxType]):
         """
@@ -327,11 +329,11 @@ class TradingStrategy(ABC):
             if len(self.trade_detail.txn_detail_list) > 0:
                 last_balance = self.trade_detail.txn_detail_list[-1].acct_balance
                 if last_balance <= 0:
-                    logging.info(f"[{start_time}] 帳戶餘額已歸零 ({last_balance})，終止回測。")
+                    logging.info(f"[testResult][{start_time}] 帳戶餘額已歸零 ({last_balance})，終止回測。")
                     break
 
             if self.is_in_cool_down_period(start_time):
-                logging.debug(f"in_cool_down_period")
+                logging.info(f"[testResult]in_cool_down_period cool down~~")
                 continue
 
             current_idx = full_back_test_df.index.get_loc(start_time)
@@ -342,12 +344,18 @@ class TradingStrategy(ABC):
                 self.cool_down_period = self.last_td.cool_down_period
 
             # 確認有沒有爆倉
-            self.check_break_position(prev_row)
+            if self.check_break_position(prev_row):
+                logging.info("[testResult]爆倉了")
 
             # 決策是否交易
             logging.debug(f"last 2 get_trade_record_df rows data[{get_trade_record_df[len(get_trade_record_df) - 2:]}]")
             trade_record = self.get_trade_record_by_date(get_trade_record_df)
 
+            if trade_record:
+                logging.info(
+                    f"[testResult]{trade_record.date} {trade_record.type} {trade_record.unit} in {trade_record.price} because {trade_record.reason}")
+            else:
+                logging.debug(f"[testResult]not meet trade strategy")
             # 紀錄交易紀錄
             trade_svc.build_txn_detail_list_df(current_row, self.initial_capital,
                                                self.leverage,
