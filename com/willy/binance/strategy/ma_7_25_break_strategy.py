@@ -245,20 +245,17 @@ class Ma725BreakStrategy(TradingStrategy):
             last_1_td = non_stop_loss_td_list[len(non_stop_loss_td_list) - 1]
             last_2_td = non_stop_loss_td_list[len(non_stop_loss_td_list) - 2]
 
-            # last_1_td = trade_detail.txn_detail_list[len(trade_detail.txn_detail_list) - 1]
-            # last_2_td = trade_detail.txn_detail_list[len(trade_detail.txn_detail_list) - 2]
-
-            # if self.get_trade_index_switch_status(MaIndexSwitch.FAKE_BREAK_EARN) and last_1_td.profit > 0:
-            #     return None
+            trade_record_gap = self.binance_svc.get_historical_klines_df(self.product, self.tickets_interval,
+                                                                         last_1_td.trade_record.date,
+                                                                         row.start_time).shape[0] - 1
 
             # 近2個交易是做反向交易
             # 賣>買>馬上跌破 > 賣
             # 買>賣>馬上突破 > 買
             if last_1_td.trade_record.type != last_2_td.trade_record.type \
-                    and ((last_1_td.trade_record.type == TradeType.BUY and row.ma7 < row.ma25 and (
-                    self.date_idx_map[row.start_time] - self.date_idx_map[last_1_td.trade_record.date]) < 5) \
-                         or (last_1_td.trade_record.type == TradeType.SELL and row.ma7 > row.ma25 and (
-                            self.date_idx_map[row.start_time] - self.date_idx_map[last_1_td.trade_record.date]) < 5)):
+                    and ((last_1_td.trade_record.type == TradeType.BUY and row.ma7 < row.ma25 and trade_record_gap < 5) \
+                         or (
+                                 last_1_td.trade_record.type == TradeType.SELL and row.ma7 > row.ma25 and trade_record_gap < 5)):
                 # build trade record
                 trade_type = TradeType.BUY if last_1_td.trade_record.type == TradeType.SELL else TradeType.SELL
 

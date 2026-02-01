@@ -7,7 +7,7 @@ from com.willy.binance.util import type_util
 
 if __name__ == '__main__':
     strategy = Ma725BreakStrategy(f"bot_ma_7_25_break",
-                                  type_util.str_to_datetime(f"2026-01-11T00:00:00Z"),
+                                  type_util.str_to_datetime(f"2025-11-11T00:00:00Z"),
                                   type_util.str_to_datetime(f"2026-01-30T00:00:00Z"), Decimal("6000")
                                   , BinanceProduct.BTCUSDT, Decimal("20"), {}, CoolDownPeriodSettingDto(2, 96))
 
