@@ -108,10 +108,10 @@ class HedgeStrategy:
                     f"{hedge_buy_list[hedge_trade_idx].price}\t{hedge_buy_list[hedge_trade_idx].amt}\t{hedge_sell_list[hedge_trade_idx].amt}")
 
         # 回測交易紀錄
-        daily_kline_list = binance_svc.get_historical_klines(hedge_grid_backtest_req.binance_product,
-                                                             Client.KLINE_INTERVAL_5MINUTE,
-                                                             start_date=hedge_grid_backtest_req.start_time,
-                                                             end_date=hedge_grid_backtest_req.end_time)
+        daily_kline_list = binance_svc.get_futures_historical_klines(hedge_grid_backtest_req.binance_product,
+                                                                     Client.KLINE_INTERVAL_5MINUTE,
+                                                                     start_date=hedge_grid_backtest_req.start_time,
+                                                                     end_date=hedge_grid_backtest_req.end_time)
         single_side_invest_amt = (hedge_grid_backtest_req.invest_amt / 2).quantize(DECIMAL_PLACE_2, ROUND_FLOOR)
         single_side_guarantee_amt = (hedge_grid_backtest_req.guarantee_amt / 2).quantize(DECIMAL_PLACE_2, ROUND_FLOOR)
 

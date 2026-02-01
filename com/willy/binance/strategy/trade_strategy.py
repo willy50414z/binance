@@ -290,9 +290,9 @@ class TradingStrategy(ABC):
         look_back_timedelta = self.get_lookback_timedelta()
         if self.is_aws_profile:
             full_back_test_df = \
-                self.binance_svc.get_klines(self.product, self.tickets_interval,
-                                            self.start_time - look_back_timedelta,
-                                            self.end_time)
+                self.binance_svc.get_futures_klines(self.product, self.tickets_interval,
+                                                    self.start_time - look_back_timedelta,
+                                                    self.end_time)
         else:
             full_back_test_df = \
                 self.binance_svc.get_historical_klines_df(self.product, self.tickets_interval,
@@ -313,8 +313,13 @@ class TradingStrategy(ABC):
             self.cool_down_period = self.last_td.cool_down_period
 
         current_idx = full_back_test_df.index.get_loc(start_time)
-        get_trade_record_df = full_back_test_df.iloc[:current_idx]
-        prev_row = get_trade_record_df.iloc[-1]
+        # 回測的時候是每15分鐘用前一筆K棒的價格計算回測，ex. 09:15要用09:00~09:14:59.999的K棒計算
+        # aws計算的時候會用當前最新的K棒進行計算，因為是透過育計算的方式處理，ex. 09:19就會先用0915~0919的K棒進行計算
+        if self.is_aws_profile:
+            get_trade_record_df = full_back_test_df.iloc[:current_idx + 1]
+        else:
+            get_trade_record_df = full_back_test_df.iloc[:current_idx]
+        prev_row = full_back_test_df.iloc[current_idx - 1]
         current_row = full_back_test_df.loc[start_time]
 
         # 確認有沒有爆倉

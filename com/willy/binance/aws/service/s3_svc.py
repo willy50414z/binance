@@ -79,7 +79,7 @@ class S3Service:
         except ClientError as e:
             # 針對檔案不存在的特殊處理 (Optional)
             if e.response['Error']['Code'] == "NoSuchKey":
-                logging.error(f"錯誤：找不到檔案 {key}")
+                # logging.error(f"錯誤：找不到檔案 {key}")
                 return None
             logging.error(f"S3 讀取失敗: {e}")
             raise

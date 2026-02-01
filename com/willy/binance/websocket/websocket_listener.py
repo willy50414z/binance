@@ -21,7 +21,7 @@ def listen_kline_socket(msg_handler, product: BinanceProduct, kline_interval=Cli
     twm = ThreadedWebsocketManager(api_key=API_KEY, api_secret=API_SECRET)
     twm.start()  # 啟動執行緒管理器
 
-    logging.info(f"開始監聽 {SYMBOL} 的 {INTERVAL} K 線...")
+    logging.info(f"開始監聽 {product.name} 的 {kline_interval} K 線...")
 
     # 啟動 K 線串流訂閱
     # ks_klines 是 K-line Stream 的縮寫，它會呼叫 handle_socket_message 函式來處理數據
@@ -72,6 +72,7 @@ def handle_socket_message(msg):
             print(f"交易量 (V): {kline['v']}")
             print("=" * 40)
 
+        # print(kline)
         # 如果 K 線已收盤，您可以在這裡執行一些邏輯，例如：
         # if is_closed:
         #     print(f"--- 15 分鐘 K 線 {open_time_dt} 已經結束，準備執行策略 ---")
