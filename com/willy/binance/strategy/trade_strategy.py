@@ -7,6 +7,7 @@ from enum import Enum
 from typing import List
 
 import pandas as pd
+from com.willy.binance.exceptions.self_exceptions import StopTradeException
 
 from com.willy.binance.aws.service import s3_svc
 from com.willy.binance.config import const
@@ -45,8 +46,8 @@ class TradingStrategy(ABC):
         self.other_args = other_args
         # self.guarantee_amt = initial_capital - self.invest_amt
         self.binance_svc = BinanceSvc(is_demo=False, is_testnet=False)
-        self.trade_detail = TradeDetail([])
-        self.date_idx_map = {}
+        self.trade_detail = None
+        self.has_init_trade_detail = False
         self.cool_down_period = cool_down_period
         self.is_aws_profile = is_aws_profile
         # if is_aws_profile:
@@ -285,27 +286,78 @@ class TradingStrategy(ABC):
             else:
                 return False
 
+    def get_backtest_dataframe(self):
+        look_back_timedelta = self.get_lookback_timedelta()
+        if self.is_aws_profile:
+            full_back_test_df = \
+                self.binance_svc.get_klines(self.product, self.tickets_interval,
+                                            self.start_time - look_back_timedelta,
+                                            self.end_time)
+        else:
+            full_back_test_df = \
+                self.binance_svc.get_historical_klines_df(self.product, self.tickets_interval,
+                                                          self.start_time - look_back_timedelta,
+                                                          self.end_time)
+        return full_back_test_df
+
+    def handle_trade(self, start_time, full_back_test_df, is_persist_trade_detail=False):
+        if not self.has_init_trade_detail:
+            if self.is_aws_profile:
+                self.trade_detail = self.s3_svc.get_trade_detail(self.test_name)
+            else:
+                self.trade_detail = TradeDetail([])
+            self.has_init_trade_detail = True
+        self.last_td = self.trade_detail.txn_detail_list[len(self.trade_detail.txn_detail_list) - 1] if len(
+            self.trade_detail.txn_detail_list) > 0 else None
+        if self.last_td:
+            self.cool_down_period = self.last_td.cool_down_period
+
+        current_idx = full_back_test_df.index.get_loc(start_time)
+        get_trade_record_df = full_back_test_df.iloc[:current_idx]
+        prev_row = get_trade_record_df.iloc[-1]
+        current_row = full_back_test_df.loc[start_time]
+
+        # 確認有沒有爆倉
+        if self.check_break_position(prev_row):
+            logging.info("[testResult]爆倉了")
+            raise StopTradeException()
+
+        # 帳戶餘額已歸零須停止回測
+        if len(self.trade_detail.txn_detail_list) > 0:
+            last_balance = self.trade_detail.txn_detail_list[-1].acct_balance
+            if last_balance <= 0:
+                logging.info(f"[testResult][{start_time}] 帳戶餘額已歸零 ({last_balance})，終止回測。")
+                raise StopTradeException()
+
+        if self.is_in_cool_down_period(start_time):
+            logging.info(f"[testResult]in_cool_down_period cool down~~")
+            return
+
+        # 決策是否交易
+        trade_record = self.get_trade_record_by_date(get_trade_record_df)
+
+        if trade_record:
+            logging.info(
+                f"[testResult]{trade_record.date} {trade_record.type} {trade_record.unit} in {trade_record.price} because {trade_record.reason}")
+            # 紀錄交易紀錄
+            trade_svc.build_txn_detail_list_df(current_row, self.initial_capital,
+                                               self.leverage,
+                                               trade_record,
+                                               self.trade_detail, self.cool_down_period)
+
+            if is_persist_trade_detail and self.is_aws_profile and trade_record is not None:
+                self.s3_svc.write_trade_detail(self.test_name, self.trade_detail)
+        else:
+            logging.debug(f"[testResult]not meet trade strategy")
+
     def run_backtest(self):
         logging.info(
             f"start run backtest,test_name[{self.test_name}]start_time[{self.start_time}]end_time[{self.end_time}]"
             f"initial_capital[{self.initial_capital}]product[{self.product.name}]leverage[{self.leverage}]"
             f"is_aws_profile[{self.is_aws_profile}]cool_down_period[{self.cool_down_period}]")
 
-        # 先計算技術指標需要提前撈的資料
-        look_back_timedelta = self.get_lookback_timedelta()
-
         # 獲取回測時間
-        if self.is_aws_profile:
-            full_back_test_df = \
-                self.binance_svc.get_klines(self.product, self.tickets_interval,
-                                            self.start_time - look_back_timedelta,
-                                            self.end_time)
-            self.trade_detail = self.s3_svc.get_trade_detail(self.test_name)
-        else:
-            full_back_test_df = \
-                self.binance_svc.get_historical_klines_df(self.product, self.tickets_interval,
-                                                          self.start_time - look_back_timedelta,
-                                                          self.end_time)
+        full_back_test_df = self.get_backtest_dataframe()
 
         # 計算技術指標
         self.append_tech_ides(full_back_test_df)
@@ -314,56 +366,12 @@ class TradingStrategy(ABC):
 
         backtest_start_time_list = backtest_df.index
         logging.debug(f"backtest_start_time_list[{backtest_start_time_list}]")
-        row_idx = 0
         # 逐日回測
         for start_time in backtest_start_time_list:
-            # 準備共用參數
-            self.date_idx_map[start_time] = row_idx
-            row_idx += 1
-            self.last_td = self.trade_detail.txn_detail_list[len(self.trade_detail.txn_detail_list) - 1] if len(
-                self.trade_detail.txn_detail_list) > 0 else None
-            # if row_idx % 1000 == 0:
-            #     print(f"finish {row_idx} / {backtest_start_time_list.shape[0]}")
-            logging.debug(f"last_td[{self.last_td}]")
-            # 帳戶餘額已歸零須停止回測
-            if len(self.trade_detail.txn_detail_list) > 0:
-                last_balance = self.trade_detail.txn_detail_list[-1].acct_balance
-                if last_balance <= 0:
-                    logging.info(f"[testResult][{start_time}] 帳戶餘額已歸零 ({last_balance})，終止回測。")
-                    break
-
-            if self.is_in_cool_down_period(start_time):
-                logging.info(f"[testResult]in_cool_down_period cool down~~")
-                continue
-
-            current_idx = full_back_test_df.index.get_loc(start_time)
-            get_trade_record_df = full_back_test_df.iloc[:current_idx]
-            prev_row = get_trade_record_df.iloc[-1]
-            current_row = backtest_df.loc[start_time]
-            if self.last_td:
-                self.cool_down_period = self.last_td.cool_down_period
-
-            # 確認有沒有爆倉
-            if self.check_break_position(prev_row):
-                logging.info("[testResult]爆倉了")
-
-            # 決策是否交易
-            logging.debug(f"last 2 get_trade_record_df rows data[{get_trade_record_df[len(get_trade_record_df) - 2:]}]")
-            trade_record = self.get_trade_record_by_date(get_trade_record_df)
-
-            if trade_record:
-                logging.info(
-                    f"[testResult]{trade_record.date} {trade_record.type} {trade_record.unit} in {trade_record.price} because {trade_record.reason}")
-            else:
-                logging.debug(f"[testResult]not meet trade strategy")
-            # 紀錄交易紀錄
-            trade_svc.build_txn_detail_list_df(current_row, self.initial_capital,
-                                               self.leverage,
-                                               trade_record,
-                                               self.trade_detail, self.cool_down_period)
-
-            if self.is_aws_profile and trade_record is not None:
-                self.s3_svc.write_trade_detail(self.test_name, self.trade_detail)
+            try:
+                self.handle_trade(start_time, full_back_test_df)
+            except StopTradeException:
+                break
 
         if not self.is_aws_profile:
             # 製圖
