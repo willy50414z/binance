@@ -7,7 +7,6 @@ from enum import Enum
 from typing import List
 
 import pandas as pd
-from com.willy.binance.exceptions.self_exceptions import StopTradeException
 
 from com.willy.binance.aws.service import s3_svc
 from com.willy.binance.config import const
@@ -18,6 +17,7 @@ from com.willy.binance.dto.trade_record import TradeRecord
 from com.willy.binance.enums.binance_product import BinanceProduct
 from com.willy.binance.enums.tech_idx_type import TechIdxType
 from com.willy.binance.enums.trade_reason import TradeReason, TradeReasonType
+from com.willy.binance.exceptions.self_exceptions import StopTradeException
 from com.willy.binance.service import trade_svc, chart_service, tech_idx_svc
 from com.willy.binance.service.binance_svc import BinanceSvc
 from com.willy.binance.util import type_util
@@ -369,7 +369,7 @@ class TradingStrategy(ABC):
         # 逐日回測
         for start_time in backtest_start_time_list:
             try:
-                self.handle_trade(start_time, full_back_test_df)
+                self.handle_trade(start_time, full_back_test_df, True)
             except StopTradeException:
                 break
 

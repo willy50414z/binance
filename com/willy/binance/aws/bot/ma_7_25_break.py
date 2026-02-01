@@ -92,7 +92,7 @@ def dt_second_or_ms_zero(d: datetime) -> bool:
     return d.second == 0 and d.microsecond == 0
 
 
-def test_strategy(trade_time: datetime) -> TradingStrategy:
+def run_strategy(trade_time: datetime) -> TradingStrategy:
     maStrategy.start_time = trade_time
     maStrategy.end_time = trade_time
     maStrategy.trade_detail = TradeDetail([])
@@ -113,7 +113,7 @@ def lambda_handler(event, context):
     # last_row = history_kline_df.iloc[-1]
     trade_time = previous_quarter_hour(datetime.now().astimezone(ZoneInfo("UTC")))  # FIXME
 
-    maStrategy = test_strategy(trade_time)
+    maStrategy = run_strategy(trade_time)
 
     if maStrategy.trade_detail.txn_detail_list is not None and len(maStrategy.trade_detail.txn_detail_list) > 0 and \
             maStrategy.trade_detail.txn_detail_list[-1].date == trade_time:
@@ -138,4 +138,12 @@ def lambda_handler(event, context):
 
 
 if __name__ == '__main__':
-    test_strategy(type_util.str_to_datetime(f"2026-01-27T06:15:00Z"))
+    # run_strategy(type_util.str_to_datetime(f"2026-01-27T06:15:00Z"))
+    test_datetime = type_util.str_to_datetime(f"2026-01-27T06:15:00Z")
+    maStrategy.start_time = test_datetime
+    maStrategy.end_time = test_datetime
+
+    full_back_test_df = maStrategy.get_backtest_dataframe()
+    maStrategy.append_tech_ides(full_back_test_df)
+    maStrategy.handle_trade(test_datetime, full_back_test_df, False)
+    print(maStrategy.trade_detail)
