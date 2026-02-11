@@ -3,11 +3,13 @@ import copy
 import logging
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from typing import List, Tuple
 from zoneinfo import ZoneInfo
 
-from com.willy.binance.dto.cool_down_period_setting_dto import CoolDownPeriodSettingDto
+from com.willy.binance.dto.cool_down_period_dto import CoolDownPeriodSettingDto
 from com.willy.binance.dto.trade_detail import TradeDetail
 from com.willy.binance.enums.binance_product import BinanceProduct
+from com.willy.binance.service import trade_svc
 from com.willy.binance.strategy.ma_7_25_break_strategy import Ma725BreakStrategy
 from com.willy.binance.strategy.trade_strategy import TradingStrategy
 from com.willy.binance.util import type_util
@@ -40,17 +42,17 @@ def check_price_worker(price, df_template, check_time):
     # 重算指標
     local_strategy.append_tech_ides(local_df)
 
-    is_triggered = False
+    trade_record = None
     try:
         local_strategy.handle_trade(check_time, local_df, False)
         if len(local_strategy.trade_detail.txn_detail_list) > 0 and \
                 local_strategy.trade_detail.txn_detail_list[-1].trade_record is not None and \
                 local_strategy.trade_detail.txn_detail_list[-1].trade_record.date == check_time:
-            is_triggered = True
+            trade_record = local_strategy.trade_detail.txn_detail_list[-1].trade_record
     except Exception:
         pass
 
-    return price, is_triggered
+    return price, trade_record
 
 
 def get_tradable_price_interval_list(maStrategy, dt):
@@ -84,8 +86,13 @@ def get_tradable_price_interval_list(maStrategy, dt):
 
     print(f"開始預計算可交易價格帶 (多執行緒逼近法)，範圍: {start_price} ~ {end_price}，最小精度: {step}")
 
-    # 記錄每個價格的檢查結果: {price: is_triggered}
+    # 記錄每個價格的檢查結果: {price: trade_record}
     results = {}
+
+    def get_signature(record):
+        if record is None:
+            return None
+        return (record.type, record.reason)
 
     # 使用 ThreadPoolExecutor
     # 建議 worker 數依照 CPU 核心數調整，或是因應 Python GIL 與 clone 開銷適度設定
@@ -97,13 +104,13 @@ def get_tradable_price_interval_list(maStrategy, dt):
                 # 尚未檢查過的才送出任務
                 if p not in results:
                     futures.append(
-                        executor.submit(check_price_worker, p, original_df, test_datetime)
+                        executor.submit(check_price_worker, p, original_df, dt)
                     )
 
             # 等待當批次完成
             for future in concurrent.futures.as_completed(futures):
-                p, triggered = future.result()
-                results[p] = triggered
+                p, trade_record = future.result()
+                results[p] = trade_record
 
         # 1. 初始檢查點: 中間(當前價), 下界, 上界
         # 這樣我們可以形成最初的兩個區間: [start, current] 和 [current, end]
@@ -131,12 +138,11 @@ def get_tradable_price_interval_list(maStrategy, dt):
                     continue
 
                 # 檢查邊界狀態
-                is_low_trig = results.get(low, False)
-                is_high_trig = results.get(high, False)
+                sig_low = get_signature(results.get(low))
+                sig_high = get_signature(results.get(high))
 
-                # 優化邏輯: 如果區間兩端狀態一致 (都是 True 或都是 False)，則假設中間不用測
-                # 這裡依照需求: "如果有測到上限限都是需要做交易的就不需要再往裡面測了"
-                if is_low_trig == is_high_trig:
+                # 優化邏輯: 如果區間兩端狀態一致 (Signature 相同)，則假設中間不用測 (假設連續性)
+                if sig_low == sig_high:
                     continue
 
                 # 否則需要細分，加入中點
@@ -168,54 +174,45 @@ def get_tradable_price_interval_list(maStrategy, dt):
 
     if sorted_prices:
         current_range_start = None
+        current_sig = None
 
-        for i in range(len(sorted_prices) - 1):
-            p1 = sorted_prices[i]
-            p2 = sorted_prices[i + 1]
+        for i, p in enumerate(sorted_prices):
+            sig = get_signature(results[p])
 
-            s1 = results[p1]
-            s2 = results[p2]
+            if current_sig is not None:
+                # Currently tracking a range
+                if sig == current_sig:
+                    # Same signature, continue
+                    pass
+                else:
+                    # Signature changed or became None
+                    # Close previous range at prev_p
+                    prev_p = sorted_prices[i - 1]
+                    trigger_ranges.append((current_range_start, prev_p, current_sig[0], current_sig[1]))
 
-            # 如果 p1 是觸發點
-            if s1:
-                if current_range_start is None:
-                    current_range_start = p1
-
-            # 檢查區段 [p1, p2] 是否連續
-            # 如果 s1 和 s2 都是 True，且距離不算太遠(或是我們主動跳過了中間)，視為連續
-            # 如果 s1 True, s2 False -> 斷開。 Range end at p1?
-            # 由於我們是二分逼近，分界點會在 p1, p2 之間。
-            # 我們這裡保守輸出: 僅顯示已確認的點覆蓋範圍。
-
-            if s1 and not s2:
-                # p1 True -> p2 False, 結束這段
-                trigger_ranges.append((current_range_start, p1))
-                current_range_start = None
-            elif not s1 and s2:
-                # p1 False -> p2 True, 新段開始 (會在下一次迴圈處理 s2 時被視為 s1)
-                pass
-            elif not s1 and not s2:
-                # 都 False
-                pass
+                    if sig is not None:
+                        # Start new range
+                        current_range_start = p
+                        current_sig = sig
+                    else:
+                        # Become None
+                        current_range_start = None
+                        current_sig = None
             else:
-                # 都 True -> 連續
-                pass
+                # Not currently tracking
+                if sig is not None:
+                    current_range_start = p
+                    current_sig = sig
 
-        # 處理最後一個點
-        last_p = sorted_prices[-1]
-        if results[last_p]:
-            if current_range_start is None:
-                trigger_ranges.append((last_p, last_p))
-            else:
-                trigger_ranges.append((current_range_start, last_p))
-        else:
-            if current_range_start is not None:
-                trigger_ranges.append((current_range_start, sorted_prices[-2]))
+        # Handle the last point if still open
+        if current_sig is not None:
+            last_p = sorted_prices[-1]
+            trigger_ranges.append((current_range_start, last_p, current_sig[0], current_sig[1]))
 
     if trigger_ranges:
         logging.info("預測可交易價格區間 (Trigger Ranges):")
-        for s, e in trigger_ranges:
-            logging.info(f"  {s} ~ {e}")
+        for s, e, t_type, reason in trigger_ranges:
+            logging.info(f"  {s} ~ {e} | Type: {t_type} | Reason: {reason}")
         return trigger_ranges
     else:
         return None
@@ -302,6 +299,29 @@ def run_strategy(trade_time: datetime) -> TradingStrategy:
     return maStrategy
 
 
+def build_websocket_callable(trade_price_interval_list: List[Tuple]):
+    def onMessage(klineMessage):
+        if 'k' in klineMessage:
+            kline = klineMessage['k']
+            is_closed = kline['x']
+            if is_closed:
+                close = kline['c']
+                for trade_price_interval in trade_price_interval_list:
+                    if trade_price_interval[0] <= close <= trade_price_interval[1]:
+                        strategy = get_strategy()
+                        invest_amt = strategy.get_invest_amt()
+                        trade_record = trade_svc.create_trade_record(datetime.now().astimezone(timezone.utc),
+                                                                     trade_price_interval[2], close, amt=invest_amt,
+                                                                     reason=trade_price_interval[3])
+
+                        # 下單
+
+                        trade_detail = strategy.s3_svc.get_trade_detail(maStrategy.test_name)
+
+                        trade_svc.build_txn_detail_list(strategy.product, invest_amt, strategy.leverage, trade_record,
+                                                        trade_detail, )
+
+
 def lambda_handler(event, context):
     # get kline interval start time
     trade_time = previous_quarter_hour(datetime.now().astimezone(ZoneInfo("UTC")))  # FIXME
@@ -311,14 +331,7 @@ def lambda_handler(event, context):
     tradable_price_interval_list = get_tradable_price_interval_list(maStrategy, trade_time)
 
     if tradable_price_interval_list and len(tradable_price_interval_list) > 0:
-        tradable_price_interval = tradable_price_interval_list[0]
-        current_price = maStrategy.binance_svc.get_futures_symbol_ticker(maStrategy.product)['price']
-
-        if tradable_price_interval[0] <= current_price <= tradable_price_interval[1]:
-            # create trade record and trade
-            pass
-        else:
-            # 還沒進入交易價格，等進入了再出手
+        def trade_if_in_range():
             pass
 
     # TODO

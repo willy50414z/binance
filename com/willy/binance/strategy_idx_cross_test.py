@@ -1,4 +1,4 @@
-from com.willy.binance.dto.cool_down_period_setting_dto import CoolDownPeriodSettingDto
+from com.willy.binance.dto.cool_down_period_dto import CoolDownPeriodSettingDto
 from com.willy.binance.enums.binance_product import BinanceProduct
 from com.willy.binance.service import strategy_idx_cross_test_svc
 from com.willy.binance.strategy.ma_7_25_break_strategy import Ma725BreakStrategy

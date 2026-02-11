@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from com.willy.binance.dto.cool_down_period_setting_dto import CoolDownPeriodSettingDto
+from com.willy.binance.dto.cool_down_period_dto import CoolDownPeriodSettingDto
 from com.willy.binance.enums.binance_product import BinanceProduct
 from com.willy.binance.strategy.ma_7_25_break_strategy import Ma725BreakStrategy, Ma725BreakIndexSwitch
 from com.willy.binance.util import type_util

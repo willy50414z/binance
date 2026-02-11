@@ -7,7 +7,7 @@ import pandas as pd
 from com.willy.binance.config.config_util import config_util
 from com.willy.binance.config.const import DECIMAL_PLACE_2
 from com.willy.binance.dto.binance_kline import BinanceKline
-from com.willy.binance.dto.cool_down_period_setting_dto import CoolDownPeriodSettingDto
+from com.willy.binance.dto.cool_down_period_dto import CoolDownPeriodSettingDto
 from com.willy.binance.dto.trade_detail import TradeDetail
 from com.willy.binance.dto.trade_record import TradeRecord
 from com.willy.binance.dto.txn_detail import TxnDetail
@@ -139,8 +139,7 @@ def build_txn_detail_list_df(row, invest_amt: Decimal,
 
 def build_txn_detail_list(binanceKline: BinanceKline, invest_amt: Decimal,
                           leverage: Decimal,
-                          trade_record: TradeRecord | None, trade_detail: TradeDetail,
-                          cool_down_period: CoolDownPeriodSettingDto):
+                          trade_record: TradeRecord | None, trade_detail: TradeDetail):
     """
 
     :param binanceKline:
@@ -237,7 +236,7 @@ def build_txn_detail_list(binanceKline: BinanceKline, invest_amt: Decimal,
                           break_even_point_price,
                           max_loss,
                           acct_balance,
-                          trade_record, cool_down_period))
+                          trade_record))
         elif trade_record.type == TradeType.SELL:
             total_handle_units = last_handle_units - trade_record.unit
             trade_amt = calc_trade_amt(trade_record.price, trade_record.unit)
@@ -302,7 +301,7 @@ def build_txn_detail_list(binanceKline: BinanceKline, invest_amt: Decimal,
                           break_even_point_price,
                           max_loss,
                           acct_balance,
-                          trade_record, cool_down_period))
+                          trade_record))
     else:
         profit = calc_profit(current_price, last_handle_amt, last_handle_fee, last_handle_units,
                              HandleFeeType.TAKER)
@@ -317,7 +316,7 @@ def build_txn_detail_list(binanceKline: BinanceKline, invest_amt: Decimal,
                       current_price, profit, profit_ratio, last_total_profit + profit,
                       last_trade_detail_force_close_offset_price,
                       last_trade_break_even_point_price, last_trade_max_loss, last_trade_detail_acct_balance,
-                      trade_record, cool_down_period))
+                      trade_record))
 
 
 # TODO is function need to check

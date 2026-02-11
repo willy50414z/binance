@@ -1,8 +1,9 @@
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+from typing import Optional
 
-from com.willy.binance.dto.cool_down_period_setting_dto import CoolDownPeriodSettingDto
+from com.willy.binance.dto.cool_down_period_dto import CoolDownPeriodDto
 from com.willy.binance.dto.trade_record import TradeRecord
 
 
@@ -22,4 +23,4 @@ class TxnDetail:
     max_loss: Decimal
     acct_balance: Decimal
     trade_record: TradeRecord | None
-    cool_down_period: CoolDownPeriodSettingDto
+    cool_down_period: Optional[CoolDownPeriodDto] = None

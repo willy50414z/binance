@@ -11,7 +11,7 @@ import pandas as pd
 from com.willy.binance.aws.service import s3_svc
 from com.willy.binance.config import const
 from com.willy.binance.config.const import DECIMAL_PLACE_2
-from com.willy.binance.dto.cool_down_period_setting_dto import CoolDownPeriodSettingDto
+from com.willy.binance.dto.cool_down_period_dto import CoolDownPeriodSettingDto, CoolDownPeriodDto
 from com.willy.binance.dto.trade_detail import TradeDetail
 from com.willy.binance.dto.trade_record import TradeRecord
 from com.willy.binance.enums.binance_product import BinanceProduct
@@ -32,7 +32,7 @@ class TradingStrategy(ABC):
                  end_time: datetime,
                  initial_capital: Decimal,
                  product: BinanceProduct,
-                 leverage: Decimal, other_args=None, cool_down_period: CoolDownPeriodSettingDto = None,
+                 leverage: Decimal, other_args=None, cool_down_setting: CoolDownPeriodSettingDto = None,
                  is_aws_profile: bool = False):
         if other_args is None:
             other_args = {}
@@ -48,7 +48,7 @@ class TradingStrategy(ABC):
         self.binance_svc = BinanceSvc(is_demo=False, is_testnet=False)
         self.trade_detail = None
         self.has_init_trade_detail = False
-        self.cool_down_period = cool_down_period
+        self.cool_down_setting = cool_down_setting
         self.is_aws_profile = is_aws_profile
         # if is_aws_profile:
         #     self.s3_svc = s3_svc.get_backtest_svc(self.test_name)
@@ -260,31 +260,55 @@ class TradingStrategy(ABC):
             df['pnl_ratio'] = df['profit'] / (df['entry_price'] * abs(df['units']))  # 報酬率
         return df
 
-    def is_in_cool_down_period(self, start_time: datetime) -> bool:
-        if not self.cool_down_period:
+    def is_in_cool_down_period(self, dt: datetime) -> bool:
+        if not self.cool_down_setting or not self.last_td:
+            return False
+
+        has_profit_trade_list = [td for td in self.trade_detail.txn_detail_list if td.profit != 0]
+
+        last_profit_trade_detail = has_profit_trade_list[-1]
+        last_cool_down_period = last_profit_trade_detail.cool_down_period
+
+        # profit skip cool down period
+        if last_profit_trade_detail.profit > 0:
             return False
 
         # 還在冷靜期
-        if self.cool_down_period.next_trade_time is not None and start_time < self.cool_down_period.next_trade_time:
-            logging.debug(f"in_cool_down_period,next_trade_time[{self.cool_down_period.next_trade_time}]")
-            return True
-
-        if len(self.trade_detail.txn_detail_list) > self.cool_down_period.loss_count:
-            # 確認有沒有連續虧損
-            traded_txn_list = [td for td in self.trade_detail.txn_detail_list if
-                               td.trade_record is not None and td.trade_record.unit != 0
-                               and (self.cool_down_period.last_loss_time is None
-                                    or (self.cool_down_period.last_loss_time is not None
-                                        and td.date > self.cool_down_period.last_loss_time))]
-            last_n_txn_detail_list = traded_txn_list[-self.cool_down_period.loss_count:]
-            if len(last_n_txn_detail_list) > 0 and len([td for td in last_n_txn_detail_list if td.profit > 0]) == 0:
-                # 連續虧損
-                self.cool_down_period.next_trade_time = start_time + self.get_timedelta_by_tick_count(
-                    self.cool_down_period.cool_down_period)
-                self.cool_down_period.last_loss_time = self.last_td.date
+        if last_cool_down_period:
+            if last_cool_down_period.next_trade_time is not None and dt < last_cool_down_period.next_trade_time:
                 return True
             else:
                 return False
+
+        if last_profit_trade_detail.profit < 0:
+            # 最後一筆交易是損失的，需要紀錄累計次數，並判斷是否需要進入冷靜期
+            if len(has_profit_trade_list) > 1:
+                # 不是第一筆交易，要檢查前一筆交易
+                last_two_trade_detail = has_profit_trade_list[-2]
+                if last_two_trade_detail.cool_down_period:
+                    # 前2筆也有冷靜期紀錄
+                    if last_two_trade_detail.cool_down_period.next_trade_time:
+                        # 前面觸發過冷靜期了，避免連續觸發，這次當作第一次
+                        return self._set_cool_down_period(last_profit_trade_detail, 1)
+                    else:
+                        return self._set_cool_down_period(last_profit_trade_detail,
+                                                          last_two_trade_detail.cool_down_period.accu_loss_count + 1)
+                else:
+                    # 前2筆沒有冷靜期，那這就是第一筆
+                    return self._set_cool_down_period(last_profit_trade_detail, 1)
+            else:
+                # 第一筆損失
+                return self._set_cool_down_period(last_profit_trade_detail, 1)
+
+    def _set_cool_down_period(self, last_profit_trade_detail, accu_loss_count):
+        next_trade_time = None
+        if self.cool_down_setting.loss_count == accu_loss_count:
+            # 觸發冷靜期，計算下次交易日
+            next_trade_time = last_profit_trade_detail.date + self.get_timedelta_by_tick_count(
+                self.cool_down_setting.cool_down_period)
+        last_profit_trade_detail.cool_down_period = CoolDownPeriodDto(accu_loss_count, next_trade_time,
+                                                                      last_profit_trade_detail.date)
+        return next_trade_time is not None
 
     def get_backtest_dataframe(self):
         look_back_timedelta = self.get_lookback_timedelta()
@@ -333,10 +357,6 @@ class TradingStrategy(ABC):
             if last_balance <= 0:
                 logging.info(f"[testResult][{start_time}] 帳戶餘額已歸零 ({last_balance})，終止回測。")
                 raise StopTradeException()
-
-        if self.is_in_cool_down_period(start_time):
-            logging.info(f"[testResult]in_cool_down_period cool down~~")
-            return
 
         # 決策是否交易
         trade_record = self.get_trade_record_by_date(get_trade_record_df)
