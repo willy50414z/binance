@@ -12,3 +12,4 @@
 /htmlcov/
 /.vscode/launch.json
 /.vscode/settings.json
+/com/willy/binance/freqtrade/user_data/**
