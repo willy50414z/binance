@@ -131,17 +131,17 @@ class Ma725BreakStrategy(TradingStrategy):
             logging.info(f"[testResult]in_cool_down_period cool down~~")
             return
 
-        # 2. 停損檢查：檢查持倉是否觸發停損條件 (例如虧損超過 1000 點)
-        trade_record = self.get_stop_loss_trade_record(self.last_td, lastest_row)
-        if trade_record:
-            logging.debug("[strategy] trade in stop_loss_trade")
-            return trade_record
-
         # 2. 策略進場檢查：檢查是否符合 MA 交叉策略 (趨勢突破)
         # 注意：這裡會優先於停損檢查執行。若符合反向訊號，會直接反手 (平倉並開新倉)。
         trade_record = self.trade_if_cross_ma(self.last_td, lastest_row)
         if trade_record:
             logging.debug("[strategy] trade in trade_if_cross_ma")
+            return trade_record
+
+        # 3. 停損檢查：檢查持倉是否觸發停損條件 (例如虧損超過 1000 點)
+        trade_record = self.get_stop_loss_trade_record(self.last_td, lastest_row)
+        if trade_record:
+            logging.debug("[strategy] trade in stop_loss_trade")
             return trade_record
 
         # 4. 假突破/假跌破檢查：若開啟此功能，檢查是否發生剛進場就被反向拉回的情況
@@ -299,18 +299,18 @@ class Ma725BreakStrategy(TradingStrategy):
         如果前兩次交易方向顯示市場在短時間內反覆震盪 (買->賣->買 或 賣->買->賣)，
         意圖捕捉假突破後的反回補。
         """
-        if len(self.trade_detail.txn_detail_list) > 1:
+        non_stop_loss_td_list = [td for td in self.trade_detail.txn_detail_list if
+                                 td.trade_record.reason.trade_reason_type != TradeReasonType.PASSIVE]
+        if len(non_stop_loss_td_list) > 1:
             # 排除停損出場的交易，只看主動進出的交易
-            non_stop_loss_td_list = [td for td in self.trade_detail.txn_detail_list if
-                                     td.trade_record.reason.trade_reason_type != TradeReasonType.PASSIVE]
             last_1_td = non_stop_loss_td_list[len(non_stop_loss_td_list) - 1]
             last_2_td = non_stop_loss_td_list[len(non_stop_loss_td_list) - 2]
 
             # 計算上一筆交易與當前的時間差 (K線數量)
+
             # 注意: 這裡呼叫了外部 API 查 K 線，建議優化 (直接用 row 時間計算)
-            trade_record_gap = self.binance_svc.get_historical_klines_df(self.product, self.tickets_interval,
-                                                                         last_1_td.trade_record.date,
-                                                                         row.start_time).shape[0] - 1
+            trade_record_gap = ((row.start_time - last_1_td.trade_record.date).total_seconds()
+                                / self.get_timedelta_by_tick_count(1).total_seconds())
 
             # 條件：
             # 1. 最近兩次交易方向相反
