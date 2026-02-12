@@ -10,3 +10,5 @@
 /data/
 /report/
 /htmlcov/
+/.vscode/launch.json
+/.vscode/settings.json
