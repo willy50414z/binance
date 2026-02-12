@@ -266,6 +266,9 @@ class TradingStrategy(ABC):
 
         has_profit_trade_list = [td for td in self.trade_detail.txn_detail_list if td.profit != 0]
 
+        if len(has_profit_trade_list) == 0:
+            return False
+
         last_profit_trade_detail = has_profit_trade_list[-1]
         last_cool_down_period = last_profit_trade_detail.cool_down_period
 
@@ -368,7 +371,7 @@ class TradingStrategy(ABC):
             trade_svc.build_txn_detail_list_df(current_row, self.initial_capital,
                                                self.leverage,
                                                trade_record,
-                                               self.trade_detail, self.cool_down_period)
+                                               self.trade_detail)
 
             if is_persist_trade_detail and self.is_aws_profile and trade_record is not None:
                 self.s3_svc.write_trade_detail(self.test_name, self.trade_detail)
@@ -379,7 +382,7 @@ class TradingStrategy(ABC):
         logging.info(
             f"start run backtest,test_name[{self.test_name}]start_time[{self.start_time}]end_time[{self.end_time}]"
             f"initial_capital[{self.initial_capital}]product[{self.product.name}]leverage[{self.leverage}]"
-            f"is_aws_profile[{self.is_aws_profile}]cool_down_period[{self.cool_down_period}]")
+            f"is_aws_profile[{self.is_aws_profile}]cool_down_period[{self.cool_down_setting}]")
 
         # 獲取回測時間
         full_back_test_df = self.get_backtest_dataframe()

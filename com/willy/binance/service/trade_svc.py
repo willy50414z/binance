@@ -124,8 +124,7 @@ def create_close_trade_record(date: datetime, price: Decimal, txn_detail: TxnDet
 
 def build_txn_detail_list_df(row, invest_amt: Decimal,
                              leverage_ratio: Decimal,
-                             trade_record: TradeRecord | None, trade_detail: TradeDetail,
-                             cool_down_period: CoolDownPeriodSettingDto):
+                             trade_record: TradeRecord | None, trade_detail: TradeDetail):
     if trade_record is None:
         return
     return build_txn_detail_list(
@@ -134,7 +133,7 @@ def build_txn_detail_list_df(row, invest_amt: Decimal,
                      Decimal(str(row.vol)), row.end_time,
                      int(row.number_of_trade)), invest_amt, leverage_ratio,
         trade_record,
-        trade_detail, cool_down_period)
+        trade_detail)
 
 
 def build_txn_detail_list(binanceKline: BinanceKline, invest_amt: Decimal,
