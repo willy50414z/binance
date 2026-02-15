@@ -86,9 +86,9 @@ class BinanceSvc:
                     query_start_time = cached_df.index[-1]
 
             # 需要的資料不在檔案中，call API撈
-            klines = self.client.get_historical_klines(binance_product.name, kline_interval,
-                                                       int(query_start_time.timestamp() * 1000),
-                                                       int(query_end_time.timestamp() * 1000))
+            klines = self.client.get_klines().get_historical_klines(binance_product.name, kline_interval,
+                                                                    int(query_start_time.timestamp() * 1000),
+                                                                    int(query_end_time.timestamp() * 1000))
             selected_fields = [[row[i] for i in (0, 1, 2, 3, 4, 5, 6, 8)] for row in klines]
             new_data_df = pd.DataFrame(selected_fields,
                                        columns=['start_time', 'open', 'high', 'low', 'close', 'vol', 'end_time',
