@@ -31,8 +31,12 @@ class BitcoinMLStrategy(IStrategy):
     INTERFACE_VERSION = 3
     
     # Strategy parameters
-    minimal_roi = { "0": 100 } # Let signal decide exit
-    stoploss = -0.05
+    minimal_roi = {
+        "0": 0.01,    # 1% profit take profit
+        "60": 0.005,  # After 1h, 0.5%
+        "120": 0.0    # After 2h, exit based on signal only
+    }
+    stoploss = -0.02
     trailing_stop = True
     
     # Timeframe must match what was used for training (1h in our trainer)
@@ -88,17 +92,19 @@ class BitcoinMLStrategy(IStrategy):
                 dataframe['ml_prob'] = preds
                 
                 # Signal Logic
-                # Prob > 0.6 -> High chance of Uptrend -> Long
+                # Model predicts probability of > 0.5% gain
+                # Since training target is rare (only ~X% of samples), use lower threshold
+                # prob > 0.15 -> moderate confidence in uptrend -> Long
                 dataframe.loc[
-                    (dataframe['ml_prob'] > 0.6) & 
+                    (dataframe['ml_prob'] > 0.15) & 
                     (dataframe['volume'] > 0), 
                     'enter_long'
                 ] = 1
                 
-                # Prob < 0.4 -> Low chance of Uptrend (likely Downtrend) -> Short
+                # prob < 0.10 -> likely downtrend -> Short
                 if self.can_short:
                     dataframe.loc[
-                        (dataframe['ml_prob'] < 0.4) & 
+                        (dataframe['ml_prob'] < 0.10) & 
                         (dataframe['volume'] > 0), 
                         'enter_short'
                     ] = 1
@@ -113,18 +119,18 @@ class BitcoinMLStrategy(IStrategy):
         dataframe.loc[:, 'exit_short'] = 0
         
         if 'ml_prob' in dataframe.columns:
-            # Exit Long if prob drops below neutral (e.g. 0.5)
+            # Exit Long if prob drops below threshold (signal reversal)
             dataframe.loc[
-                (dataframe['ml_prob'] < 0.5) & 
+                (dataframe['ml_prob'] < 0.08) & 
                 (dataframe['volume'] > 0),
                 'exit_long'
             ] = 1
             
-            # Exit Short if prob rises above neutral
+            # Exit Short if prob rises above threshold
             dataframe.loc[
-                (dataframe['ml_prob'] > 0.5) & 
+                (dataframe['ml_prob'] > 0.18) & 
                 (dataframe['volume'] > 0),
                 'exit_short'
             ] = 1
-            
+        
         return dataframe

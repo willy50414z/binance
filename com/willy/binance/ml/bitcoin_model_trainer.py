@@ -2,7 +2,7 @@
 import sys
 import os
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 # Ensure project root is in sys.path
 project_root = os.getcwd()
@@ -25,7 +25,6 @@ def train_and_save():
     
     # Define Dates
     # Total 6 years: 4 years train + 2 years test
-    from datetime import timezone
     end_date = datetime.now(timezone.utc)
     start_date = end_date - timedelta(days=365 * 6)
     
@@ -45,49 +44,75 @@ def train_and_save():
     
     print(f"Fetched {len(df)} rows.")
     
-    # Split Data
-    # Convert index to datetime if it's not already
+    # Initialize Model
+    model = BitcoinTradingModel()
+
+    # 1. Calculate Features on FULL dataset first
+    # This prevents edge effects for Moving Averages, RSI, etc. at the split boundary.
+    print("Calculating features on full dataset...")
+    df = model.calculate_features(df, drop_na=True)
+    
+    # Ensure index is datetime
     if not isinstance(df.index, pd.DatetimeIndex):
          df.index = pd.to_datetime(df['start_time'])
 
+    # 2. Strict Train/Test Split
+    print(f"Splitting data at {split_date}...")
     train_df = df[df.index <= split_date].copy()
     test_df = df[df.index > split_date].copy()
     
-    print(f"Training Data (up to {split_date.strftime('%Y-%m-%d')}): {len(train_df)} rows.")
-    print(f"Backtest Data (after {split_date.strftime('%Y-%m-%d')}): {len(test_df)} rows.")
+    print(f"Training Data: {len(train_df)} rows.")
+    print(f"Test/Backtest Data: {len(test_df)} rows.")
     
     if len(train_df) < 1000:
         print("Warning: Training data is very small. Check data fetching.")
+        return
     
-    # Train Model
-    model = BitcoinTradingModel()
-    print("Starting full pipeline training...")
-    model.full_pipeline_train(train_df)
+    # 3. Train HMM (ONLY on Training Data) - Prevents Leakage
+    print("Training HMM on Training Data...")
+    model.train_hmm(train_df)
     
-    # Save Model
-    # Determine save path
-    # e:\code\binance\com\willy\binance\ml\models
+    # 4. Filter Regimes (on Training Data)
+    print("Filtering High Volatility Regimes from Training Data...")
+    train_filtered = model.filter_regime(train_df, max_vol_rank=1)
+    print(f"Training data reduced from {len(train_df)} to {len(train_filtered)} rows after filtering.")
+    
+    # 5. Train LightGBM (ONLY on Filtered Training Data)
+    # Note: train_lgbm splits this further into train/val for early stopping
+    print("Training LightGBM on Filtered Training Data...")
+    model.train_lgbm(train_filtered)
+    
+    print("Training Complete.")
+
+    # 6. Save Model
     script_dir = os.path.dirname(os.path.abspath(__file__))
     model_dir = os.path.join(script_dir, 'models')
     os.makedirs(model_dir, exist_ok=True)
     
     model_path = os.path.join(model_dir, 'bitcoin_model_v1.pkl')
     model.save_model(model_path)
-    print(f"Model saved successfully to: {model_path}")
     
-    # Optional: Quick validation on test set
-    print("validating on test set (first 100 rows)...")
-    try:
-        if len(test_df) > 0:
-            validation_sample = test_df.iloc[:100].copy()
-            # Calculate features first because predict expects them
-            validation_sample = model.calculate_features(validation_sample)
-            # Filter? No, predict should handle it or we skip bad regimes manually
-            # But the model pipeline stored 'selected_features' which rely on columns existing
-            preds = model.predict(validation_sample)
-            print(f"Predictions generated: {preds[:10]}")
-    except Exception as e:
-        print(f"Validation failed (expected if features need full calculation): {e}")
+    # 7. Verification / Sanity Check on Test Data
+    print("Running sanity check on Test Data...")
+    if len(test_df) > 0:
+        try:
+            # We predict on the Test set to see if code runs.
+            # Real performance evaluation should be done via Backtesting (Freqtrade).
+            preds = model.predict(test_df)
+            
+            # Simple stats
+            n_long = sum(preds > 0.5) # Assuming binary output is 0 or 1, or probability?
+            # predict returns probability or class? 
+            # LGBMRegressor returns float. LGBMClassifier predict returns class?
+            # In train_lgbm we used lgb.train which returns a Booster. predict returns raw scores/probs.
+            # If objective='binary', it returns probabilities.
+            
+            print(f"Test Set Predictions (first 10): {preds[:10]}")
+            print(f"Average Prediction Probability: {preds.mean():.4f}")
+            print(f"Min: {preds.min():.4f}, Max: {preds.max():.4f}")
+            
+        except Exception as e:
+            print(f"Prediction on test set failed: {e}")
 
 if __name__ == "__main__":
     train_and_save()

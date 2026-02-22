@@ -13,10 +13,9 @@ from typing import List, Tuple, Dict, Any
 class BitcoinTradingModel:
     def __init__(self):
         self.hmm_model = None
-        self.rf_model = None
         self.lgbm_model = None
         self.scaler = StandardScaler()
-        self.selected_features = []
+        self.feature_cols = [] # 已使用的特徵列
         self.regime_map = {}  # Map states to volatility levels
 
     # --- 特徵工程 (複製/改編邏輯) ---
@@ -50,9 +49,10 @@ class BitcoinTradingModel:
         # 布林帶 (Bollinger Bands)
         self._append_bbands(df)
         
-        # 目標：下一階段收益正負號 (1 表示上漲，0 表示下跌)
-        # 我們想要預測下一階段價格是否會上漲
-        df['target'] = (df['close'].shift(-1) > df['close']).astype(int)
+        # 目標：下一階段收益是否超過閾值 (0.5%)
+        # 1 表示上漲超過 0.5%，0 表示其他狀況 (平盤或下跌)
+        threshold = 0.005
+        df['target'] = ((df['close'].shift(-1) > df['close'] * (1 + threshold))).astype(int)
 
         if drop_na:
             return df.dropna()
@@ -217,55 +217,27 @@ class BitcoinTradingModel:
         # 同時排除排名為 999 (未知/第一行) 的數據
         return df_filtered[df_filtered['regime_rank'] <= max_vol_rank]
 
-    # --- 2. 使用隨機森林 (Random Forest) 進行特徵篩選 ---
-    def select_features(self, df: pd.DataFrame, target_col='target', n_features=10):
-        """
-        利用隨機森林篩選最重要的特徵。
-        :param df: 已經過濾市場狀態的 DataFrame
-        :param target_col: 目標列名稱
-        :param n_features: 要篩選的特徵數量
-        """
-        # 排除非特徵列
-        exclude_cols = ['start_time', 'end_time', 'open', 'high', 'low', 'close', 'vol', 'number_of_trade', 'target', 'regime', 'regime_rank']
-        feature_cols = [c for c in df.columns if c not in exclude_cols]
-        
-        # 準備特徵矩陣 X 和目標向量 y
-        X = df[feature_cols]
-        y = df[target_col]
-        
-        # 刪除含有空值的行
-        combined = pd.concat([X, y], axis=1).dropna()
-        if len(combined) == 0:
-            print("沒有可用於特徵篩選的數據")
-            return
-
-        X = combined[feature_cols]
-        y = combined[target_col]
-
-        # 初始化並訓練隨機森林模型
-        self.rf_model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
-        self.rf_model.fit(X, y)
-        
-        # 獲取特徵重要性並排序
-        importances = self.rf_model.feature_importances_
-        indices = np.argsort(importances)[::-1]
-        
-        # 保存前 n_features 個最重要的特徵名稱
-        self.selected_features = [feature_cols[i] for i in indices[:n_features]]
-        print(f"已篩選的特徵: {self.selected_features}")
+    # --- 2. (已移除) 隨機森林特徵篩選 ---
+    # 根據建議，移除隨機森林篩選，直接讓 LightGBM 處理特徵。
 
     # --- 3. 使用 LightGBM 進行預測訓練 ---
     def train_lgbm(self, df: pd.DataFrame, target_col='target'):
         """
-        基於篩選出的特徵訓練 LightGBM 模型。
+        基於所有特徵訓練 LightGBM 模型。
         :param df: 已經過濾市場狀態的 DataFrame
         :param target_col: 目標列名稱
         """
-        if not self.selected_features:
-            raise ValueError("尚未篩選特徵。請先執行 select_features。")
-            
-        # 提取已篩選的特徵和目標
-        X = df[self.selected_features]
+        # 定義特徵列 (排除非特徵列)
+        exclude_cols = ['start_time', 'end_time', 'open', 'high', 'low', 'close', 'vol', 'number_of_trade', 'target', 'regime', 'regime_rank']
+        self.feature_cols = [c for c in df.columns if c not in exclude_cols]
+        
+        print(f"Training on features: {self.feature_cols}")
+
+        if not self.feature_cols:
+             raise ValueError("No features found for training.")
+
+        # 提取特徵和目標
+        X = df[self.feature_cols]
         y = df[target_col]
         
         # 劃分訓練集和測試集 (不打亂順序，因為是時間序列數據)
@@ -279,14 +251,20 @@ class BitcoinTradingModel:
         train_data = lgb.Dataset(X_train_scaled, label=y_train)
         valid_data = lgb.Dataset(X_test_scaled, label=y_test, reference=train_data)
         
-        # 設定 LightGBM 參數
+        # 設定 LightGBM 參數 (User Optimized)
         params = {
-            'objective': 'binary',          # 二進制分類
-            'metric': 'binary_logloss',    # 損失函數
-            'boosting_type': 'gbdt',       # 梯度提升樹
-            'num_leaves': 31,
-            'learning_rate': 0.05,
-            'feature_fraction': 0.9,
+            'objective': 'binary',
+            'metric': 'binary_logloss',
+            'boosting_type': 'gbdt',
+            'num_leaves': 15,          # 降低葉子數量，防止過擬合
+            'max_depth': 4,            # 限制樹深度
+            'learning_rate': 0.01,     # 降低學習率
+            'feature_fraction': 0.7,   # 特徵採樣
+            'bagging_fraction': 0.7,   # 數據採樣
+            'bagging_freq': 5,
+            'lambda_l1': 0.1,          # L1 正則化
+            'lambda_l2': 0.1,          # L2 正則化
+            'min_data_in_leaf': 20,
             'verbose': -1
         }
         
@@ -294,13 +272,14 @@ class BitcoinTradingModel:
         self.lgbm_model = lgb.train(
             params,
             train_data,
-            num_boost_round=1000,           # 最大迭代次數
-            valid_sets=[valid_data],        # 驗證集
+            num_boost_round=1000,
+            valid_sets=[valid_data],
             callbacks=[
-                lgb.early_stopping(stopping_rounds=50), # 提前停止機制
-                lgb.log_evaluation(50)                  # 每 50 次輸出一次日誌
+                lgb.early_stopping(stopping_rounds=50),
+                lgb.log_evaluation(50)
             ]
         )
+
 
     def predict(self, df: pd.DataFrame) -> np.ndarray:
         """
@@ -309,13 +288,20 @@ class BitcoinTradingModel:
         if not self.lgbm_model:
             raise ValueError("LGBM model not trained")
             
-        if not self.selected_features:
-             raise ValueError("Features not selected")
+        if not self.feature_cols:
+             raise ValueError("Feature columns not defined")
 
         # Extract features
-        X = df[self.selected_features].copy()
+        # Check if features exist
+        missing_cols = set(self.feature_cols) - set(df.columns)
+        if missing_cols:
+             print(f"Warning: Missing columns {missing_cols}, filling with 0")
+             for col in missing_cols:
+                 df[col] = 0
         
-        # Handle missings (simple fill, or relying on LGBM handling, but scaler needs it clean usually)
+        X = df[self.feature_cols].copy()
+        
+        # Handle missings
         X = X.fillna(0) 
         
         X_scaled = self.scaler.transform(X)
@@ -338,24 +324,19 @@ class BitcoinTradingModel:
         self.train_hmm(df)
         
         print("正在過濾市場狀態...")
-        # 僅保留低波動和中波動狀態 (假設排名 0 和 1 是可接受的)
         df_filtered = self.filter_regime(df, max_vol_rank=1)
         print(f"狀態過濾後，數據從 {len(df)} 行減少到 {len(df_filtered)} 行。")
         
-        print("正在篩選特徵...")
-        self.select_features(df_filtered)
-        
-        print("正在訓練 LightGBM...")
+        print("正在訓練 LightGBM (直接使用所有特徵)...")
         self.train_lgbm(df_filtered)
         print("訓練完成。")
 
     def save_model(self, path: str):
         joblib.dump({
             'hmm_model': self.hmm_model,
-            'rf_model': self.rf_model,
             'lgbm_model': self.lgbm_model,
             'scaler': self.scaler,
-            'selected_features': self.selected_features,
+            'feature_cols': self.feature_cols,
             'regime_map': self.regime_map
         }, path)
         print(f"Model saved to {path}")
@@ -366,9 +347,8 @@ class BitcoinTradingModel:
             
         data = joblib.load(path)
         self.hmm_model = data['hmm_model']
-        self.rf_model = data['rf_model']
         self.lgbm_model = data['lgbm_model']
         self.scaler = data['scaler']
-        self.selected_features = data['selected_features']
+        self.feature_cols = data['feature_cols']
         self.regime_map = data['regime_map']
         print(f"Model loaded from {path}")
