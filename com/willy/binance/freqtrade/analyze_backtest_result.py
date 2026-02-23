@@ -1,19 +1,18 @@
+import csv
+import hashlib
 import json
+import math
 import os
 import shutil
-import csv
+import statistics
+import subprocess
 import sys
 import zipfile
-import math
-import statistics
-import hashlib
-import subprocess
-from bisect import bisect_left, bisect_right
+from bisect import bisect_right
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from html import escape as html_escape
 from typing import Any
-
-import pyperclip
 
 # Allow running this file directly
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
@@ -149,7 +148,8 @@ def resolve_artifacts(stem: str) -> RunArtifacts:
     zip_path = root_zip if os.path.exists(root_zip) else None
 
     # If anything is missing but we have a zip, try extracting.
-    if zip_path is not None and (json_path is None or signals_path is None or meta_path is None or config_path is None or rejected_path is None or market_change_path is None):
+    if zip_path is not None and (
+            json_path is None or signals_path is None or meta_path is None or config_path is None or rejected_path is None or market_change_path is None):
         _maybe_extract_zip(zip_path, extracted_dir)
         if os.path.exists(extracted_json):
             json_path = json_path or extracted_json
@@ -324,9 +324,9 @@ def _load_signals_frames(signals_path: str, strategy_name: str | None) -> list[A
             if isinstance(obj, dict):
                 # pandas orient="split": {"index": [...], "columns": [...], "data": [...]}
                 if (
-                    isinstance(obj.get("columns"), list)
-                    and isinstance(obj.get("data"), list)
-                    and ("index" not in obj or isinstance(obj.get("index"), list))
+                        isinstance(obj.get("columns"), list)
+                        and isinstance(obj.get("data"), list)
+                        and ("index" not in obj or isinstance(obj.get("index"), list))
                 ):
                     try:
                         return pd.DataFrame(obj["data"], columns=obj["columns"], index=obj.get("index"))
@@ -483,9 +483,9 @@ def analyze_signals(signals_path: str | None, strategy_name: str) -> tuple[dict[
 
 
 def parse_result(
-    json_path: str | None,
-    strategy_name: str,
-    signals_path: str | None = None,
+        json_path: str | None,
+        strategy_name: str,
+        signals_path: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, dict[str, float]], list[dict[str, Any]]]:
     if not json_path or not os.path.exists(json_path):
         return {"Status": "Result file not found", "Backtest result": json_path or "N/A"}, {}, []
@@ -505,7 +505,8 @@ def parse_result(
         "Sharpe": f"{strategy_data.get('sharpe', 0):.2f}" if strategy_data.get("sharpe") else "N/A",
         "Sortino": f"{strategy_data.get('sortino', 0):.2f}" if strategy_data.get("sortino") else "N/A",
         "Calmar": f"{strategy_data.get('calmar', 0):.2f}" if strategy_data.get("calmar") else "N/A",
-        "Max Drawdown %": f"{strategy_data.get('max_drawdown_account', 0) * 100:.2f}%" if strategy_data.get("max_drawdown_account") else "N/A",
+        "Max Drawdown %": f"{strategy_data.get('max_drawdown_account', 0) * 100:.2f}%" if strategy_data.get(
+            "max_drawdown_account") else "N/A",
         "Avg Duration (s)": strategy_data.get("holding_avg_s", "N/A"),
         "Backtest Days": strategy_data.get("backtest_days", "N/A"),
         "CAGR %": f"{strategy_data.get('cagr', 0) * 100:.2f}%" if strategy_data.get("cagr") is not None else "N/A",
@@ -529,12 +530,12 @@ def parse_result(
 
 
 def export_freqtrade_trade_point_chart_png(
-    backtest_json_path: str,
-    signals_pkl_path: str,
-    strategy_name: str,
-    timerange: str,
-    output_path: str,
-    pair: str | None = None,
+        backtest_json_path: str,
+        signals_pkl_path: str,
+        strategy_name: str,
+        timerange: str,
+        output_path: str,
+        pair: str | None = None,
 ) -> str:
     import json as _json
 
@@ -675,15 +676,440 @@ def export_freqtrade_trade_point_chart_png(
     return output_path
 
 
+def export_freqtrade_trade_point_chart_html(
+        signals_path: str | None,
+        market_change_path: str | None,
+        strategy_name: str,
+        trade_rows: list[dict[str, Any]],
+        starting_balance: float,
+        output_html_path: str,
+        output_points_csv_path: str,
+        pair: str | None = None,
+) -> tuple[str, str, str, int]:
+    try:
+        import pandas as pd  # type: ignore
+    except Exception as e:
+        raise ImportError("pandas is required to export trade point html") from e
+
+    pair_counts: dict[str, int] = {}
+    for row in trade_rows:
+        p = str(row.get("pair") or "")
+        if p:
+            pair_counts[p] = pair_counts.get(p, 0) + 1
+
+    selected_pair = pair or ""
+    if not selected_pair:
+        ranked_pairs = sorted(pair_counts.keys(), key=lambda p: pair_counts.get(p, 0), reverse=True)
+        selected_pair = ranked_pairs[0] if ranked_pairs else ""
+
+    utc8 = timezone(timedelta(hours=8))
+
+    def _fmt_ts_utc8(value: Any) -> str:
+        ts = _parse_ts(value) if not isinstance(value, datetime) else value
+        if ts is None:
+            return ""
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        return ts.astimezone(utc8).strftime("%Y-%m-%d %H:%M:%S")
+
+    points: list[dict[str, Any]] = []
+    for row in trade_rows:
+        row_pair = str(row.get("pair") or "")
+        if selected_pair and row_pair != selected_pair:
+            continue
+
+        direction = str(row.get("direction") or "").lower()
+        is_short = direction == "short"
+
+        open_ts = _parse_ts(row.get("open_date_utc") or row.get("open_time"))
+        close_ts = _parse_ts(row.get("close_date_utc") or row.get("close_time"))
+        open_rate = _to_float(row.get("open_rate"), 0.0)
+        close_rate = _to_float(row.get("close_rate"), 0.0)
+
+        if open_ts and open_rate > 0:
+            points.append(
+                {
+                    "ts_utc": open_ts if open_ts.tzinfo is not None else open_ts.replace(tzinfo=timezone.utc),
+                    "timestamp": _fmt_ts_utc8(open_ts),
+                    "pair": row_pair,
+                    "trade_id": row.get("trade_id"),
+                    "event": "entry",
+                    "side": "SELL" if is_short else "BUY",
+                    "price": round(open_rate, 8),
+                    "amount": _to_float(row.get("amount"), 0.0),
+                    "profit_abs": "",
+                    "profit_pct": "",
+                    "reason": str(row.get("enter_tag") or "enter"),
+                }
+            )
+
+        if close_ts and close_rate > 0:
+            points.append(
+                {
+                    "ts_utc": close_ts if close_ts.tzinfo is not None else close_ts.replace(tzinfo=timezone.utc),
+                    "timestamp": _fmt_ts_utc8(close_ts),
+                    "pair": row_pair,
+                    "trade_id": row.get("trade_id"),
+                    "event": "exit",
+                    "side": "BUY" if is_short else "SELL",
+                    "price": round(close_rate, 8),
+                    "amount": _to_float(row.get("amount"), 0.0),
+                    "profit_abs": round(_to_float(row.get("profit_abs"), 0.0), 8),
+                    "profit_pct": round(_pct(_to_float(row.get("profit_ratio"), 0.0)), 4),
+                    "reason": str(row.get("exit_reason") or "exit"),
+                }
+            )
+
+    points.sort(key=lambda x: x.get("ts_utc") or datetime.min.replace(tzinfo=timezone.utc))
+
+    def _load_pair_price_df(pair_name: str, tf: str) -> Any | None:
+        if not pair_name:
+            return None
+        try:
+            import pandas as _pd  # type: ignore
+        except Exception:
+            return None
+
+        symbol = pair_name.replace("/", "_").replace(":", "_")
+        candidates = [
+            os.path.join(USERDIR, "data", "binance", "futures", f"{symbol}-{tf}-futures.feather"),
+            os.path.join(USERDIR, "data", "binance", "futures", f"{symbol}-{tf}.feather"),
+            os.path.join(USERDIR, "data", "binance", "spot", f"{symbol}-{tf}.feather"),
+        ]
+
+        for path in candidates:
+            if not os.path.exists(path):
+                continue
+            try:
+                raw = _pd.read_feather(path)
+            except Exception:
+                continue
+            if {"date", "close"}.issubset(set(raw.columns)):
+                ts = _pd.to_datetime(raw["date"], utc=True, errors="coerce")
+                close_s = _pd.to_numeric(raw["close"], errors="coerce")
+                out = _pd.DataFrame({"__ts": ts, "close": close_s}).dropna(subset=["__ts", "close"]).sort_values("__ts")
+                if not out.empty:
+                    return out
+        return None
+
+    timeframe = "15m"
+    if trade_rows:
+        timeframe = str(trade_rows[0].get("timeframe") or "15m")
+
+    price_source = "unknown"
+
+    # Prefer pair-specific candle data for accurate pricing.
+    df: Any | None = None
+    if selected_pair:
+        df = _load_pair_price_df(selected_pair, timeframe)
+        if df is not None and not df.empty:
+            price_source = "pair_candles"
+
+    # Fallback to market_change.feather when pair candle data is unavailable.
+    if market_change_path and os.path.exists(market_change_path):
+        if df is None or df.empty:
+            try:
+                market_df = pd.read_feather(market_change_path)
+                if {"date", "mean"}.issubset(set(market_df.columns)):
+                    ts = pd.to_datetime(market_df["date"], utc=True, errors="coerce")
+                    close = pd.to_numeric(market_df["mean"], errors="coerce")
+                    df = pd.DataFrame({"__ts": ts, "close": close}).dropna(subset=["__ts", "close"]).sort_values("__ts")
+                    if df is not None and not df.empty:
+                        price_source = "market_change_mean"
+            except Exception:
+                df = None
+
+    # Fallback to signals data when market_change is unavailable.
+    if df is None or df.empty:
+        pair_frames = _load_signal_pair_frames(signals_path, strategy_name)
+        if not pair_frames:
+            raise ValueError("both market_change and signals data are unavailable for html chart export")
+
+        if selected_pair and selected_pair in pair_frames:
+            frame = pair_frames[selected_pair]
+        else:
+            ranked_pairs = sorted(pair_frames.keys(), key=lambda p: pair_counts.get(p, 0), reverse=True)
+            fallback_pair = ranked_pairs[0] if ranked_pairs else ""
+            if not fallback_pair:
+                raise ValueError("unable to determine pair for html chart export")
+            selected_pair = fallback_pair
+            frame = pair_frames[fallback_pair]
+
+        if "date" not in frame.columns or "close" not in frame.columns:
+            raise ValueError(f"signals frame for pair '{selected_pair}' missing required columns: date/close")
+
+        ts = pd.to_datetime(frame["date"], utc=True, errors="coerce")
+        close = pd.to_numeric(frame["close"], errors="coerce")
+        df = pd.DataFrame({"__ts": ts, "close": close}).dropna(subset=["__ts", "close"]).sort_values("__ts")
+        if df.empty:
+            raise ValueError(f"signals frame for pair '{selected_pair}' is empty")
+        price_source = "signals"
+
+        if "ma7" in frame.columns:
+            df["ma7"] = pd.to_numeric(frame["ma7"], errors="coerce")
+        if "ma25" in frame.columns:
+            df["ma25"] = pd.to_numeric(frame["ma25"], errors="coerce")
+        if "ma99" in frame.columns:
+            df["ma99"] = pd.to_numeric(frame["ma99"], errors="coerce")
+        elif "ma200" in frame.columns:
+            df["ma99"] = pd.to_numeric(frame["ma200"], errors="coerce")
+    if not selected_pair and points:
+        selected_pair = str(points[0].get("pair") or "")
+
+    close = pd.to_numeric(df["close"], errors="coerce")
+    ma7 = pd.to_numeric(df["ma7"], errors="coerce") if "ma7" in df.columns else close.rolling(window=7).mean()
+    ma25 = pd.to_numeric(df["ma25"], errors="coerce") if "ma25" in df.columns else close.rolling(window=25).mean()
+    ma99 = pd.to_numeric(df["ma99"], errors="coerce") if "ma99" in df.columns else close.rolling(window=99).mean()
+
+    # Draw the full available price series.
+    window_df = df.copy()
+
+    window_close = pd.to_numeric(window_df["close"], errors="coerce")
+    window_ma7 = pd.to_numeric(window_df["ma7"],
+                               errors="coerce") if "ma7" in window_df.columns else window_close.rolling(
+        window=7
+    ).mean()
+    window_ma25 = pd.to_numeric(window_df["ma25"],
+                                errors="coerce") if "ma25" in window_df.columns else window_close.rolling(
+        window=25
+    ).mean()
+    if "ma99" in window_df.columns:
+        window_ma99 = pd.to_numeric(window_df["ma99"], errors="coerce")
+    elif "ma200" in window_df.columns:
+        window_ma99 = pd.to_numeric(window_df["ma200"], errors="coerce")
+    else:
+        window_ma99 = window_close.rolling(window=99).mean()
+
+    ts_list = []
+    ts_ns_list: list[int] = []
+    for x in window_df["__ts"]:
+        try:
+            px = x.to_pydatetime().astimezone(utc8)
+            ts_list.append(px.strftime("%Y-%m-%d %H:%M:%S"))
+            ts_ns_list.append(int(x.value))
+        except Exception:
+            ts_list.append(_fmt_ts_utc8(str(x)))
+            p = pd.to_datetime(x, utc=True, errors="coerce")
+            ts_ns_list.append(int(p.value) if not pd.isna(p) else 0)
+    close_list = window_close.tolist()
+    ma7_list = window_ma7.tolist()
+    ma25_list = window_ma25.tolist()
+    ma99_list = window_ma99.tolist()
+
+    # Build cumulative realized PnL aligned to chart candles (starts from 0).
+    trade_state: list[dict[str, Any]] = []
+    for row in trade_rows:
+        if selected_pair and str(row.get("pair") or "") != selected_pair:
+            continue
+        open_ts = _parse_ts(row.get("open_date_utc") or row.get("open_time"))
+        close_ts = _parse_ts(row.get("close_date_utc") or row.get("close_time"))
+        if open_ts is None or close_ts is None:
+            continue
+        if open_ts.tzinfo is None:
+            open_ts = open_ts.replace(tzinfo=timezone.utc)
+        if close_ts.tzinfo is None:
+            close_ts = close_ts.replace(tzinfo=timezone.utc)
+
+        trade_state.append(
+            {
+                "trade_id": str(row.get("trade_id")),
+                "is_short": str(row.get("direction") or "").lower() == "short",
+                "open_ts": open_ts,
+                "close_ts": close_ts,
+                "open_rate": _to_float(row.get("open_rate"), 0.0),
+                "amount": _to_float(row.get("amount"), 0.0),
+                "profit_abs": _to_float(row.get("profit_abs"), 0.0),
+            }
+        )
+
+    open_sorted = sorted(trade_state, key=lambda x: x["open_ts"])
+    close_sorted = sorted(trade_state, key=lambda x: x["close_ts"])
+    open_idx = 0
+    close_idx = 0
+    active: dict[str, dict[str, Any]] = {}
+    realized_pnl = 0.0
+    realized_pnl_series: list[float] = []
+
+    for i, raw_ts in enumerate(window_df["__ts"].tolist()):
+        ts = raw_ts.to_pydatetime() if hasattr(raw_ts, "to_pydatetime") else _parse_ts(raw_ts)
+        if ts is None:
+            realized_pnl_series.append(realized_pnl)
+            continue
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+
+        while open_idx < len(open_sorted) and open_sorted[open_idx]["open_ts"] <= ts:
+            t = open_sorted[open_idx]
+            active[t["trade_id"]] = t
+            open_idx += 1
+
+        while close_idx < len(close_sorted) and close_sorted[close_idx]["close_ts"] <= ts:
+            t = close_sorted[close_idx]
+            realized_pnl += t["profit_abs"]
+            active.pop(t["trade_id"], None)
+            close_idx += 1
+
+        realized_pnl_series.append(realized_pnl)
+
+    _write_csv(
+        output_points_csv_path,
+        ["timestamp", "pair", "trade_id", "event", "side", "price", "amount", "profit_abs", "profit_pct", "reason"],
+        points,
+    )
+
+    try:
+        from pyecharts import options as opts  # type: ignore
+        from pyecharts.charts import Line  # type: ignore
+    except Exception as e:
+        raise ImportError("pyecharts is required for trade point html chart export") from e
+
+    mark_points = []
+    for p in points:
+        p_ts = p.get("ts_utc")
+        if not isinstance(p_ts, datetime):
+            continue
+        if p_ts.tzinfo is None:
+            p_ts = p_ts.replace(tzinfo=timezone.utc)
+        p_ns = int(p_ts.timestamp() * 1_000_000_000)
+        pos = bisect_right(ts_ns_list, p_ns) - 1
+        if pos < 0:
+            pos = 0
+        if pos >= len(ts_list):
+            pos = len(ts_list) - 1
+        if pos < 0:
+            continue
+
+        ts_label = ts_list[pos]
+        y_value = close_list[pos] if pos < len(close_list) else p.get("price")
+        color = "#2EBD85" if p.get("side") == "BUY" else "#F6465D"
+        trade_price = _to_float(p.get("price"), 0.0)
+        mark_label = f"{ts_label}\\n{p.get('side')}\\n{trade_price:.2f}"
+        mark_points.append(
+            opts.MarkPointItem(
+                name=mark_label,
+                coord=[ts_label, float(y_value or 0.0)],
+                value=str(p.get("side") or ""),
+                itemstyle_opts=opts.ItemStyleOpts(color=color),
+                # Keep annotations on markpoints only via tooltip; avoid always-on labels.
+                label_opts=opts.LabelOpts(is_show=False, formatter="{b}", position="top"),
+            )
+        )
+
+    markpoint_opts = opts.MarkPointOpts(data=mark_points) if mark_points else None
+
+    line = Line(init_opts=opts.InitOpts(width="100%", height="680px"))
+    line.add_xaxis(ts_list)
+    line.add_yaxis("close", close_list, is_symbol_show=False, color="#111111", yaxis_index=0,
+                   markpoint_opts=markpoint_opts)
+    line.add_yaxis("ma7", ma7_list, is_symbol_show=False, color="#F19C38")
+    line.add_yaxis("ma25", ma25_list, is_symbol_show=False, color="#1C7ED6")
+    line.add_yaxis("ma99", ma99_list, is_symbol_show=False, color="#6F42C1")
+    line.add_yaxis(
+        "realized_pnl",
+        [round(v, 8) for v in realized_pnl_series],
+        is_symbol_show=False,
+        color="#138535",
+        yaxis_index=1,
+    )
+    line.extend_axis(
+        yaxis=opts.AxisOpts(
+            type_="value",
+            name="realized pnl",
+            position="right",
+            is_scale=True,
+        )
+    )
+    line.set_series_opts(
+        linestyle_opts=opts.LineStyleOpts(width=1.2),
+    )
+    line.set_global_opts(
+        title_opts=opts.TitleOpts(title=f"{strategy_name} {selected_pair} trade points", subtitle="Timezone: UTC+8"),
+        xaxis_opts=opts.AxisOpts(type_="category", name="Time (UTC+8)"),
+        yaxis_opts=opts.AxisOpts(type_="value", name="price", is_scale=True),
+        # tooltip_opts=opts.TooltipOpts(trigger="axis"),
+        datazoom_opts=[
+            opts.DataZoomOpts(type_="inside", range_start=0, range_end=100),
+            opts.DataZoomOpts(type_="slider", range_start=0, range_end=100),
+        ],
+        toolbox_opts=opts.ToolboxOpts(
+            feature={
+                "dataZoom": {"yAxisIndex": "none"},
+                "restore": {},
+                "saveAsImage": {},
+            }
+        ),
+    )
+    chart_html = line.render_embed()
+
+    table_rows_html: list[str] = []
+    for item in points:
+        table_rows_html.append(
+            "<tr>"
+            f"<td>{html_escape(str(item.get('timestamp', '')))}</td>"
+            f"<td>{html_escape(str(item.get('side', '')))}</td>"
+            f"<td>{html_escape(str(item.get('event', '')))}</td>"
+            f"<td>{html_escape(str(item.get('price', '')))}</td>"
+            f"<td>{html_escape(str(item.get('amount', '')))}</td>"
+            f"<td>{html_escape(str(item.get('profit_pct', '')))}</td>"
+            f"<td>{html_escape(str(item.get('reason', '')))}</td>"
+            "</tr>"
+        )
+
+    final_html = (
+        "<!DOCTYPE html><html lang='zh-Hant'><head><meta charset='UTF-8'>"
+        "<meta name='viewport' content='width=device-width, initial-scale=1.0'>"
+        f"<title>{html_escape(strategy_name)} trade points</title>"
+        "<style>"
+        "body{font-family:Arial,sans-serif;margin:0;background:#fff;color:#222;}"
+        ".page{padding:12px;box-sizing:border-box;min-height:100vh;display:flex;flex-direction:column;gap:10px;}"
+        "h1,h2{margin:8px 0;}"
+        ".meta{padding:8px 10px;border:1px solid #ddd;background:#fafafa;}"
+        ".content{display:grid;grid-template-columns:minmax(0,2fr) minmax(360px,1fr);gap:10px;flex:1;min-height:0;align-items:stretch;}"
+        ".chart-pane{border:1px solid #ddd;padding:8px;overflow:hidden;height:700px;box-sizing:border-box;}"
+        ".chart-pane .chart-container{height:100%;overflow:auto;}"
+        ".table-pane{border:1px solid #ddd;padding:8px;display:flex;flex-direction:column;overflow:hidden;height:700px;box-sizing:border-box;}"
+        ".table-pane h2{margin-top:0;}"
+        "table{border-collapse:collapse;width:100%;font-size:13px;}"
+        "th,td{border:1px solid #dcdcdc;padding:6px 8px;text-align:left;}"
+        "th{background:#f5f5f5;position:sticky;top:0;}"
+        ".table-wrap{flex:1;overflow:auto;border:1px solid #ddd;min-height:0;}"
+        "@media (max-width: 1200px){.content{grid-template-columns:1fr;}.chart-pane,.table-pane{height:560px;}}"
+        "</style></head><body><div class='page'>"
+        f"<h1>Trade Points</h1>"
+        f"<div class='meta'><b>Strategy:</b> {html_escape(strategy_name)} "
+        f"<b>Pair:</b> {html_escape(selected_pair)} "
+        f"<b>Points:</b> {len(points)} "
+        "<b>Timezone:</b> UTC+8 "
+        f"<b>Price Source:</b> {html_escape(price_source)}</div>"
+        "<div class='content'>"
+        f"<div class='chart-pane'><div class='chart-container'>{chart_html}</div></div>"
+        "<div class='table-pane'><h2>All Buy/Sell Points</h2>"
+        "<div class='table-wrap'><table><thead><tr>"
+        "<th>timestamp</th><th>side</th><th>event</th><th>price</th><th>amount</th><th>profit_pct</th><th>reason</th>"
+        "</tr></thead><tbody>"
+        f"{''.join(table_rows_html)}"
+        "</tbody></table></div></div></div>"
+        "</div></body></html>"
+    )
+
+    out_dir = os.path.dirname(output_html_path)
+    if out_dir:
+        _ensure_dir(out_dir)
+    with open(output_html_path, "w", encoding="utf-8") as f:
+        f.write(final_html)
+
+    return output_html_path, output_points_csv_path, selected_pair, len(points)
+
+
 def build_backtest_markdown(
-    strategy_name: str,
-    timerange: str,
-    artifacts: RunArtifacts,
-    perf: dict[str, Any],
-    gate_stats: dict[str, dict[str, float]],
-    diagnostics: dict[str, Any] | None = None,
-    trades: list[dict[str, Any]] | None = None,
-    chart_paths: list[str] | None = None,
+        strategy_name: str,
+        timerange: str,
+        artifacts: RunArtifacts,
+        perf: dict[str, Any],
+        gate_stats: dict[str, dict[str, float]],
+        diagnostics: dict[str, Any] | None = None,
+        trades: list[dict[str, Any]] | None = None,
+        chart_paths: list[str] | None = None,
 ) -> str:
     strategy_file, strategy_code = _read_strategy_code(strategy_name)
 
@@ -728,7 +1154,7 @@ def build_backtest_markdown(
             lines.append("|---|---|---:|---:|---|")
             for r in trade_rows:
                 lines.append(
-                    f"| {r.get('time','')} | {r.get('side','')} | {r.get('amount','')} | {r.get('price','')} | {r.get('reason','')} |"
+                    f"| {r.get('time', '')} | {r.get('side', '')} | {r.get('amount', '')} | {r.get('price', '')} | {r.get('reason', '')} |"
                 )
             lines.append("")
 
@@ -740,7 +1166,8 @@ def build_backtest_markdown(
             mean = gate_stats[c].get("mean")
             mean_at_entry = gate_stats[c].get("mean_at_entry")
             mean_s = f"{mean:.4f}" if isinstance(mean, (int, float)) else "N/A"
-            mean_entry_s = f"{mean_at_entry:.4f}" if isinstance(mean_at_entry, (int, float)) and mean_at_entry == mean_at_entry else "N/A"
+            mean_entry_s = f"{mean_at_entry:.4f}" if isinstance(mean_at_entry, (int,
+                                                                                float)) and mean_at_entry == mean_at_entry else "N/A"
             lines.append(f"| `{c}` | {mean_s} | {mean_entry_s} |")
         lines.append("")
 
@@ -771,7 +1198,8 @@ def build_backtest_markdown(
             lines.append("```")
         lines.append("")
 
-        rej = diagnostics.get("rejected_vs_executed", {}) if isinstance(diagnostics.get("rejected_vs_executed"), dict) else {}
+        rej = diagnostics.get("rejected_vs_executed", {}) if isinstance(diagnostics.get("rejected_vs_executed"),
+                                                                        dict) else {}
         lines.append("### Rejected vs Executed")
         lines.append("| Metric | Value |")
         lines.append("|---|---:|")
@@ -783,7 +1211,8 @@ def build_backtest_markdown(
         lines.append(f"| Opportunity Cost (Abs) | {rej.get('opportunity_cost_abs', 0.0)} |")
         lines.append("")
 
-        market = diagnostics.get("market_condition", {}) if isinstance(diagnostics.get("market_condition"), dict) else {}
+        market = diagnostics.get("market_condition", {}) if isinstance(diagnostics.get("market_condition"),
+                                                                       dict) else {}
         market_summary = market.get("summary", {}) if isinstance(market.get("summary"), dict) else {}
         market_rows = market.get("rows", []) if isinstance(market.get("rows"), list) else []
         lines.append("### Market Regime")
@@ -797,7 +1226,7 @@ def build_backtest_markdown(
             lines.append("|---|---:|---:|---:|")
             for row in market_rows:
                 lines.append(
-                    f"| {row.get('market_regime','')} | {row.get('trades',0)} | {row.get('winrate_pct',0.0)} | {row.get('avg_profit_pct',0.0)} |"
+                    f"| {row.get('market_regime', '')} | {row.get('trades', 0)} | {row.get('winrate_pct', 0.0)} | {row.get('avg_profit_pct', 0.0)} |"
                 )
         lines.append("")
 
@@ -808,7 +1237,7 @@ def build_backtest_markdown(
             lines.append("|---|---:|---:|---:|---:|")
             for row in gates:
                 lines.append(
-                    f"| `{row.get('filter','')}` | {row.get('trigger_rate_pct',0.0)} | {row.get('blocking_rate_pct',0.0)} | {row.get('wrong_filtered_rate_pct',0.0)} | {row.get('filtering_precision_pct',0.0)} |"
+                    f"| `{row.get('filter', '')}` | {row.get('trigger_rate_pct', 0.0)} | {row.get('blocking_rate_pct', 0.0)} | {row.get('wrong_filtered_rate_pct', 0.0)} | {row.get('filtering_precision_pct', 0.0)} |"
                 )
             lines.append("")
 
@@ -1007,7 +1436,8 @@ def _normalize_trades(trades: list[dict[str, Any]], timeframe: str) -> list[dict
             "profit_ratio": profit_ratio,
             "profit_pct": _pct(profit_ratio, 4),
             "max_profit_ratio": _to_float(trade.get("max_profit_ratio"), mfe_ratio),
-            "max_drawdown_ratio": _to_float(trade.get("max_drawdown", trade.get("min_profit_ratio", mae_ratio)), mae_ratio),
+            "max_drawdown_ratio": _to_float(trade.get("max_drawdown", trade.get("min_profit_ratio", mae_ratio)),
+                                            mae_ratio),
             "mfe_ratio": mfe_ratio,
             "mae_ratio": mae_ratio,
             "entry_efficiency_score": round(efficiency, 8),
@@ -1029,7 +1459,8 @@ def _normalize_trades(trades: list[dict[str, Any]], timeframe: str) -> list[dict
     return rows
 
 
-def _build_equity_and_daily(trade_rows: list[dict[str, Any]], starting_balance: float) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def _build_equity_and_daily(trade_rows: list[dict[str, Any]], starting_balance: float) -> tuple[
+    list[dict[str, Any]], list[dict[str, Any]]]:
     equity = starting_balance if starting_balance > 0 else 1.0
     peak = equity
     equity_rows: list[dict[str, Any]] = []
@@ -1077,7 +1508,9 @@ def _build_equity_and_daily(trade_rows: list[dict[str, Any]], starting_balance: 
                 "pnl_abs": round(pnl_abs, 8),
                 "pnl_pct": round(_safe_div(pnl_abs, prev), 8),
                 "equity": round(last_equity, 8),
-                "drawdown_pct": round(_pct(_safe_div(_to_float(item.get("max_peak"), 0.0) - last_equity, _to_float(item.get("max_peak"), 0.0)), 6), 6),
+                "drawdown_pct": round(_pct(
+                    _safe_div(_to_float(item.get("max_peak"), 0.0) - last_equity, _to_float(item.get("max_peak"), 0.0)),
+                    6), 6),
             }
         )
 
@@ -1107,7 +1540,8 @@ def _build_pair_breakdown(trade_rows: list[dict[str, Any]]) -> list[dict[str, An
                 "profit_factor": round(_safe_div(gross_profit, gross_loss_abs), 6) if gross_loss_abs > 0 else 0.0,
                 "net_pnl": round(sum(profits), 8),
                 "max_drawdown_proxy_pct": round(_pct(abs(min(ratios)) if ratios else 0.0), 4),
-                "avg_duration_min": round(statistics.mean([_to_float(r.get("duration_min"), 0.0) for r in rows]), 4) if rows else 0.0,
+                "avg_duration_min": round(statistics.mean([_to_float(r.get("duration_min"), 0.0) for r in rows]),
+                                          4) if rows else 0.0,
                 "avg_profit_pct": round(_pct(statistics.mean(ratios) if ratios else 0.0), 4),
                 "median_profit_pct": round(_pct(statistics.median(ratios) if ratios else 0.0), 4),
             }
@@ -1171,10 +1605,10 @@ def _build_time_breakdown(trade_rows: list[dict[str, Any]]) -> list[dict[str, An
 
 
 def _build_summary(
-    trade_rows: list[dict[str, Any]],
-    equity_rows: list[dict[str, Any]],
-    daily_rows: list[dict[str, Any]],
-    strategy_data: dict[str, Any],
+        trade_rows: list[dict[str, Any]],
+        equity_rows: list[dict[str, Any]],
+        daily_rows: list[dict[str, Any]],
+        strategy_data: dict[str, Any],
 ) -> dict[str, Any]:
     profits = [_to_float(r.get("profit_abs"), 0.0) for r in trade_rows]
     ratios = [_to_float(r.get("profit_ratio"), 0.0) for r in trade_rows]
@@ -1247,18 +1681,22 @@ def _build_summary(
         "p50_profit_pct": round(_pct(_percentile(ratios, 50)), 4),
         "p75_profit_pct": round(_pct(_percentile(ratios, 75)), 4),
         "p95_profit_pct": round(_pct(_percentile(ratios, 95)), 4),
-        "tail_worst_1pct_avg_pct": round(_pct(statistics.mean(sorted(ratios)[:max(1, len(ratios) // 100)]) if ratios else 0.0), 4),
-        "tail_best_1pct_avg_pct": round(_pct(statistics.mean(sorted(ratios)[-max(1, len(ratios) // 100):]) if ratios else 0.0), 4),
+        "tail_worst_1pct_avg_pct": round(
+            _pct(statistics.mean(sorted(ratios)[:max(1, len(ratios) // 100)]) if ratios else 0.0), 4),
+        "tail_best_1pct_avg_pct": round(
+            _pct(statistics.mean(sorted(ratios)[-max(1, len(ratios) // 100):]) if ratios else 0.0), 4),
         "fees_total": round(fees_total, 8),
         "fees_pct_of_gross_profit": round(_pct(_safe_div(fees_total, gross_profit)), 4) if gross_profit > 0 else 0.0,
-        "avg_trade_duration_min": round(statistics.mean([_to_float(r.get("duration_min"), 0.0) for r in trade_rows]) if trade_rows else 0.0, 4),
+        "avg_trade_duration_min": round(
+            statistics.mean([_to_float(r.get("duration_min"), 0.0) for r in trade_rows]) if trade_rows else 0.0, 4),
         "trades_per_day": round(_safe_div(len(trade_rows), backtest_days), 6) if backtest_days > 0 else 0.0,
         "daily_rows": len(daily_rows),
     }
 
     if len(ratios) >= 3:
         try:
-            summary["skewness"] = round(statistics.mean([(x - statistics.mean(ratios)) ** 3 for x in ratios]) / ((statistics.pstdev(ratios) or 1.0) ** 3), 8)
+            summary["skewness"] = round(statistics.mean([(x - statistics.mean(ratios)) ** 3 for x in ratios]) / (
+                    (statistics.pstdev(ratios) or 1.0) ** 3), 8)
         except Exception:
             summary["skewness"] = 0.0
     if len(ratios) >= 4:
@@ -1401,8 +1839,8 @@ def _find_signal_row(index_map: dict[str, dict[str, Any]], pair: str, ts_iso: An
 
 
 def _enrich_trades_with_market_context(
-    trade_rows: list[dict[str, Any]],
-    index_map: dict[str, dict[str, Any]],
+        trade_rows: list[dict[str, Any]],
+        index_map: dict[str, dict[str, Any]],
 ) -> None:
     for row in trade_rows:
         pair = str(row.get("pair") or "")
@@ -1573,10 +2011,10 @@ def _load_rejected_rows(rejected_path: str | None, strategy_name: str) -> list[d
 
 
 def _estimate_rejected_outcome(
-    pair: str,
-    ts_value: Any,
-    index_map: dict[str, dict[str, Any]],
-    horizon: int,
+        pair: str,
+        ts_value: Any,
+        index_map: dict[str, dict[str, Any]],
+        horizon: int,
 ) -> dict[str, Any] | None:
     sr, pos = _find_signal_row(index_map, pair, ts_value)
     if sr is None:
@@ -1617,11 +2055,11 @@ def _estimate_rejected_outcome(
 
 
 def analyze_rejected_trades(
-    artifacts: RunArtifacts,
-    strategy_name: str,
-    index_map: dict[str, dict[str, Any]],
-    trade_rows: list[dict[str, Any]],
-    timeframe: str,
+        artifacts: RunArtifacts,
+        strategy_name: str,
+        index_map: dict[str, dict[str, Any]],
+        trade_rows: list[dict[str, Any]],
+        timeframe: str,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     rejected_rows = _load_rejected_rows(artifacts.rejected_path, strategy_name)
     if not rejected_rows:
@@ -1629,15 +2067,20 @@ def analyze_rejected_trades(
             "rejected_total": 0,
             "rejected_winrate_pct": 0.0,
             "rejected_avg_hypothetical_pct": 0.0,
-            "executed_winrate_pct": round(_pct(_safe_div(sum(1 for t in trade_rows if _to_float(t.get("profit_ratio"), 0.0) > 0), len(trade_rows))), 4) if trade_rows else 0.0,
-            "executed_avg_profit_pct": round(_pct(statistics.mean([_to_float(t.get("profit_ratio"), 0.0) for t in trade_rows]) if trade_rows else 0.0), 4),
+            "executed_winrate_pct": round(_pct(
+                _safe_div(sum(1 for t in trade_rows if _to_float(t.get("profit_ratio"), 0.0) > 0), len(trade_rows))),
+                4) if trade_rows else 0.0,
+            "executed_avg_profit_pct": round(_pct(
+                statistics.mean([_to_float(t.get("profit_ratio"), 0.0) for t in trade_rows]) if trade_rows else 0.0),
+                4),
             "opportunity_cost_abs": 0.0,
         }, []
 
     avg_duration = statistics.mean([_to_float(r.get("duration_min"), 0.0) for r in trade_rows]) if trade_rows else 240.0
     tf_minutes = _timeframe_to_minutes(timeframe)
     horizon = max(1, int(round(avg_duration / max(tf_minutes, 1))))
-    avg_stake = statistics.mean([_to_float(r.get("stake_amount"), 0.0) for r in trade_rows if _to_float(r.get("stake_amount"), 0.0) > 0]) if trade_rows else 0.0
+    avg_stake = statistics.mean([_to_float(r.get("stake_amount"), 0.0) for r in trade_rows if
+                                 _to_float(r.get("stake_amount"), 0.0) > 0]) if trade_rows else 0.0
 
     analyzed: list[dict[str, Any]] = []
     for item in rejected_rows:
@@ -1652,7 +2095,8 @@ def analyze_rejected_trades(
                 "pair": pair,
                 "timestamp": _as_iso(ts_value),
                 "reason": reason,
-                "blocked_by_max_open_trades": 1 if ("max_open" in reason.lower() or "open trade" in reason.lower()) else 0,
+                "blocked_by_max_open_trades": 1 if (
+                        "max_open" in reason.lower() or "open trade" in reason.lower()) else 0,
                 "blocked_by_protection": 1 if "protection" in reason.lower() else 0,
                 "blocked_by_cooldown": 1 if "cooldown" in reason.lower() else 0,
                 "blocked_by_pairlist": 1 if "pairlist" in reason.lower() else 0,
@@ -1670,10 +2114,13 @@ def analyze_rejected_trades(
     executed_ratios = [_to_float(t.get("profit_ratio"), 0.0) for t in trade_rows]
     summary = {
         "rejected_total": len(analyzed),
-        "rejected_winrate_pct": round(_pct(_safe_div(sum(1 for r in analyzed if int(r.get("is_win", 0)) == 1), len(analyzed))), 4) if analyzed else 0.0,
+        "rejected_winrate_pct": round(
+            _pct(_safe_div(sum(1 for r in analyzed if int(r.get("is_win", 0)) == 1), len(analyzed))),
+            4) if analyzed else 0.0,
         "rejected_avg_hypothetical_pct": round(_pct(statistics.mean(rejected_ratios) if rejected_ratios else 0.0), 4),
         "executed_total": len(trade_rows),
-        "executed_winrate_pct": round(_pct(_safe_div(sum(1 for x in executed_ratios if x > 0), len(executed_ratios))), 4) if executed_ratios else 0.0,
+        "executed_winrate_pct": round(_pct(_safe_div(sum(1 for x in executed_ratios if x > 0), len(executed_ratios))),
+                                      4) if executed_ratios else 0.0,
         "executed_avg_profit_pct": round(_pct(statistics.mean(executed_ratios) if executed_ratios else 0.0), 4),
         "opportunity_cost_abs": round(sum(_to_float(r.get("opportunity_cost_abs"), 0.0) for r in analyzed), 8),
     }
@@ -1681,9 +2128,9 @@ def analyze_rejected_trades(
 
 
 def correlate_market_condition(
-    trade_rows: list[dict[str, Any]],
-    market_change_path: str | None,
-    timeframe: str,
+        trade_rows: list[dict[str, Any]],
+        market_change_path: str | None,
+        timeframe: str,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
     if not market_change_path or not os.path.exists(market_change_path):
         return {"status": "market_change.feather not found"}, [], []
@@ -1757,7 +2204,8 @@ def correlate_market_condition(
         "periods_24h": periods_24h,
         "rally_winrate_pct": next((r["winrate_pct"] for r in regime_rows if r["market_regime"] == "rally"), 0.0),
         "range_winrate_pct": next((r["winrate_pct"] for r in regime_rows if r["market_regime"] == "range"), 0.0),
-        "downtrend_winrate_pct": next((r["winrate_pct"] for r in regime_rows if r["market_regime"] == "downtrend"), 0.0),
+        "downtrend_winrate_pct": next((r["winrate_pct"] for r in regime_rows if r["market_regime"] == "downtrend"),
+                                      0.0),
     }
     trade_regime_rows: list[dict[str, Any]] = []
     for _, row in merged.iterrows():
@@ -1765,7 +2213,9 @@ def correlate_market_condition(
             {
                 "trade_id": row.get("trade_id"),
                 "pair": row.get("pair"),
-                "open_date_utc": row.get("open_date_utc").isoformat() if hasattr(row.get("open_date_utc"), "isoformat") else str(row.get("open_date_utc") or ""),
+                "open_date_utc": row.get("open_date_utc").isoformat() if hasattr(row.get("open_date_utc"),
+                                                                                 "isoformat") else str(
+                    row.get("open_date_utc") or ""),
                 "market_regime": row.get("market_regime"),
                 "market_change_24h_pct": round(_pct(_to_float(row.get("chg_24h"), 0.0)), 6),
             }
@@ -1774,9 +2224,9 @@ def correlate_market_condition(
 
 
 def analyze_gate_filter_funnel(
-    signal_index: dict[str, dict[str, Any]],
-    horizon: int,
-    drop_threshold: float = 0.01,
+        signal_index: dict[str, dict[str, Any]],
+        horizon: int,
+        drop_threshold: float = 0.01,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for pair, payload in signal_index.items():
@@ -1881,11 +2331,11 @@ def _ascii_histogram(values: list[float], bins: int = 8, width: int = 18) -> lis
 
 
 def _build_deep_diagnostics(
-    trade_rows: list[dict[str, Any]],
-    rejected_summary: dict[str, Any],
-    market_summary: dict[str, Any],
-    market_rows: list[dict[str, Any]],
-    gate_rows: list[dict[str, Any]],
+        trade_rows: list[dict[str, Any]],
+        rejected_summary: dict[str, Any],
+        market_summary: dict[str, Any],
+        market_rows: list[dict[str, Any]],
+        gate_rows: list[dict[str, Any]],
 ) -> dict[str, Any]:
     maes = [_pct(_to_float(t.get("mae_ratio"), 0.0), 4) for t in trade_rows]
     mfes = [_pct(_to_float(t.get("mfe_ratio"), 0.0), 4) for t in trade_rows]
@@ -1904,7 +2354,8 @@ def _build_deep_diagnostics(
         insights.append(
             f"Pain Point A: Avg MAE is {avg_mae:.2f}%, stoploss pressure is high; consider tighter entry filters or risk cap near 3.5%."
         )
-    if _to_float(rejected_summary.get("rejected_avg_hypothetical_pct"), 0.0) > _to_float(rejected_summary.get("executed_avg_profit_pct"), 0.0):
+    if _to_float(rejected_summary.get("rejected_avg_hypothetical_pct"), 0.0) > _to_float(
+            rejected_summary.get("executed_avg_profit_pct"), 0.0):
         insights.append(
             "Pain Point B: Rejected trades show better hypothetical average return than executed trades, max_open_trades may be locking capital in lower-quality positions."
         )
@@ -1935,10 +2386,10 @@ def _build_deep_diagnostics(
 
 
 def _build_signal_context_and_regime(
-    trade_rows: list[dict[str, Any]],
-    signal_index: dict[str, dict[str, Any]],
-    strategy_name: str,
-    strategy_data: dict[str, Any] | None = None,
+        trade_rows: list[dict[str, Any]],
+        signal_index: dict[str, dict[str, Any]],
+        strategy_name: str,
+        strategy_data: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     if not signal_index:
         return [], []
@@ -2013,12 +2464,16 @@ def _build_signal_context_and_regime(
                 "exit_roi_hit": 1 if event_name == "exit" and "roi" in exit_reason.lower() else 0,
                 "exit_stoploss_hit": 1 if event_name == "exit" and "stop" in exit_reason.lower() else 0,
                 "exit_trailing_hit": 1 if event_name == "exit" and "trail" in exit_reason.lower() else 0,
-                "exit_custom_exit_hit": 1 if event_name == "exit" and ("custom" in exit_reason.lower() or "signal" in exit_reason.lower()) else 0,
-                "exit_force_exit": 1 if event_name == "exit" and ("force" in exit_reason.lower() or "emergency" in exit_reason.lower()) else 0,
+                "exit_custom_exit_hit": 1 if event_name == "exit" and (
+                        "custom" in exit_reason.lower() or "signal" in exit_reason.lower()) else 0,
+                "exit_force_exit": 1 if event_name == "exit" and (
+                        "force" in exit_reason.lower() or "emergency" in exit_reason.lower()) else 0,
                 "current_profit_ratio": _to_float(trade.get("profit_ratio"), 0.0) if event_name == "exit" else "",
                 "trade_duration_min": _to_float(trade.get("duration_min"), 0.0) if event_name == "exit" else "",
-                "distance_to_stoploss_ratio": round(_safe_div(price_for_distance - stop_price, open_rate), 8) if event_name == "exit" and open_rate > 0 else "",
-                "distance_to_roi_ratio": round(_safe_div(roi_price - price_for_distance, open_rate), 8) if event_name == "exit" and open_rate > 0 else "",
+                "distance_to_stoploss_ratio": round(_safe_div(price_for_distance - stop_price, open_rate),
+                                                    8) if event_name == "exit" and open_rate > 0 else "",
+                "distance_to_roi_ratio": round(_safe_div(roi_price - price_for_distance, open_rate),
+                                               8) if event_name == "exit" and open_rate > 0 else "",
                 **entry_flags,
             }
             context_rows.append(row)
@@ -2069,11 +2524,11 @@ def _build_signal_context_and_regime(
 
 
 def _export_run_report(
-    stem: str,
-    strategy_name: str,
-    artifacts: RunArtifacts,
-    strategy_data: dict[str, Any],
-    trade_rows: list[dict[str, Any]],
+        stem: str,
+        strategy_name: str,
+        artifacts: RunArtifacts,
+        strategy_data: dict[str, Any],
+        trade_rows: list[dict[str, Any]],
 ) -> tuple[str, list[str], dict[str, Any], dict[str, Any]]:
     report_dir = os.path.join(REPORTS_DIR, stem)
     if os.path.exists(report_dir):
@@ -2193,6 +2648,25 @@ def _export_run_report(
 
     outputs: list[str] = []
 
+    chart_html_path = os.path.join(report_dir, "trade_points_chart.html")
+    points_csv_path = os.path.join(report_dir, "trade_points.csv")
+    try:
+        _, points_csv, chart_pair, point_count = export_freqtrade_trade_point_chart_html(
+            signals_path=artifacts.signals_path,
+            market_change_path=artifacts.market_change_path,
+            strategy_name=strategy_name,
+            trade_rows=trade_rows,
+            starting_balance=starting_balance,
+            output_html_path=chart_html_path,
+            output_points_csv_path=points_csv_path,
+        )
+        outputs.append(chart_html_path)
+        outputs.append(points_csv)
+        summary["trade_points_chart_pair"] = chart_pair
+        summary["trade_points_count"] = point_count
+    except Exception as e:
+        summary["trade_points_chart_error"] = str(e)
+
     summary_path = os.path.join(report_dir, "summary.json")
     with open(summary_path, "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2, ensure_ascii=False)
@@ -2210,7 +2684,8 @@ def _export_run_report(
         "min_rate", "max_rate",
         "trade_regime",
         "stake_amount", "amount", "profit_abs", "profit_ratio", "profit_pct",
-        "max_profit_ratio", "max_drawdown_ratio", "mfe_ratio", "mae_ratio", "entry_efficiency_score", "mfe_price", "mae_price", "mfe_ts", "mae_ts",
+        "max_profit_ratio", "max_drawdown_ratio", "mfe_ratio", "mae_ratio", "entry_efficiency_score", "mfe_price",
+        "mae_price", "mfe_ts", "mae_ts",
         "fee_open", "fee_close", "fee_total",
         "entry_spread", "exit_spread", "slippage_entry", "slippage_exit", "slippage_est",
         "expected_fill_price_entry", "expected_fill_price_exit", "assumed_fill_price_entry", "assumed_fill_price_exit",
@@ -2220,7 +2695,8 @@ def _export_run_report(
     outputs.append(trades_path)
 
     equity_path = os.path.join(report_dir, "equity_curve.csv")
-    _write_csv(equity_path, ["index", "timestamp", "trade_id", "pair", "pnl_abs", "pnl_pct", "equity", "drawdown_pct"], equity_rows)
+    _write_csv(equity_path, ["index", "timestamp", "trade_id", "pair", "pnl_abs", "pnl_pct", "equity", "drawdown_pct"],
+               equity_rows)
     outputs.append(equity_path)
 
     daily_path = os.path.join(report_dir, "daily_pnl.csv")
@@ -2228,15 +2704,18 @@ def _export_run_report(
     outputs.append(daily_path)
 
     pair_path = os.path.join(report_dir, "pair_breakdown.csv")
-    _write_csv(pair_path, ["pair", "trades", "winrate_pct", "profit_factor", "net_pnl", "max_drawdown_proxy_pct", "avg_duration_min", "avg_profit_pct", "median_profit_pct"], pair_breakdown)
+    _write_csv(pair_path, ["pair", "trades", "winrate_pct", "profit_factor", "net_pnl", "max_drawdown_proxy_pct",
+                           "avg_duration_min", "avg_profit_pct", "median_profit_pct"], pair_breakdown)
     outputs.append(pair_path)
 
     reason_path = os.path.join(report_dir, "entry_exit_reason.csv")
-    _write_csv(reason_path, ["enter_tag", "exit_reason", "count", "net_pnl", "avg_pnl", "avg_mfe_pct", "avg_mae_pct"], entry_exit_reason)
+    _write_csv(reason_path, ["enter_tag", "exit_reason", "count", "net_pnl", "avg_pnl", "avg_mfe_pct", "avg_mae_pct"],
+               entry_exit_reason)
     outputs.append(reason_path)
 
     time_path = os.path.join(report_dir, "time_breakdown.csv")
-    _write_csv(time_path, ["weekday", "hour", "trades", "winrate_pct", "expectancy_pct", "pnl_abs", "profit_factor"], time_breakdown)
+    _write_csv(time_path, ["weekday", "hour", "trades", "winrate_pct", "expectancy_pct", "pnl_abs", "profit_factor"],
+               time_breakdown)
     outputs.append(time_path)
 
     cost_path = os.path.join(report_dir, "cost_impact.csv")
@@ -2244,7 +2723,9 @@ def _export_run_report(
     outputs.append(cost_path)
 
     regime_path = os.path.join(report_dir, "regime_bins.csv")
-    _write_csv(regime_path, ["trend_regime", "volatility_regime", "trades", "expectancy_pct", "profit_factor", "max_dd_proxy_pct", "net_pnl"], regime_bins)
+    _write_csv(regime_path,
+               ["trend_regime", "volatility_regime", "trades", "expectancy_pct", "profit_factor", "max_dd_proxy_pct",
+                "net_pnl"], regime_bins)
     outputs.append(regime_path)
 
     market_cond_path = os.path.join(report_dir, "market_condition.csv")
@@ -2252,7 +2733,8 @@ def _export_run_report(
     outputs.append(market_cond_path)
 
     trade_regime_path = os.path.join(report_dir, "trade_regime.csv")
-    _write_csv(trade_regime_path, ["trade_id", "pair", "open_date_utc", "market_regime", "market_change_24h_pct"], trade_regime_rows)
+    _write_csv(trade_regime_path, ["trade_id", "pair", "open_date_utc", "market_regime", "market_change_24h_pct"],
+               trade_regime_rows)
     outputs.append(trade_regime_path)
 
     rejected_path = os.path.join(report_dir, "missed_signals.csv")
@@ -2260,8 +2742,10 @@ def _export_run_report(
         rejected_path,
         [
             "pair", "timestamp", "reason",
-            "blocked_by_max_open_trades", "blocked_by_protection", "blocked_by_cooldown", "blocked_by_pairlist", "blocked_by_volume_filter",
-            "entry_price", "potential_profit_pct", "adverse_pct", "hypothetical_profit_pct", "is_win", "opportunity_cost_abs"
+            "blocked_by_max_open_trades", "blocked_by_protection", "blocked_by_cooldown", "blocked_by_pairlist",
+            "blocked_by_volume_filter",
+            "entry_price", "potential_profit_pct", "adverse_pct", "hypothetical_profit_pct", "is_win",
+            "opportunity_cost_abs"
         ],
         rejected_rows,
     )
@@ -2270,7 +2754,8 @@ def _export_run_report(
     gate_path = os.path.join(report_dir, "gate_filter_funnel.csv")
     _write_csv(
         gate_path,
-        ["filter", "samples", "trigger_rate_pct", "blocking_rate_pct", "wrong_filtered_rate_pct", "filtering_precision_pct"],
+        ["filter", "samples", "trigger_rate_pct", "blocking_rate_pct", "wrong_filtered_rate_pct",
+         "filtering_precision_pct"],
         gate_funnel_rows,
     )
     outputs.append(gate_path)
@@ -2312,7 +2797,9 @@ def _export_run_report(
     non_zero_slip = sum(1 for r in trade_rows if abs(_to_float(r.get("slippage_est"), 0.0)) > 0)
 
     pnl_sum = sum(_to_float(r.get("profit_abs"), 0.0) for r in trade_rows)
-    final_equity = _to_float(equity_rows[-1].get("equity"), starting_balance if starting_balance > 0 else 1.0) if equity_rows else (starting_balance if starting_balance > 0 else 1.0)
+    final_equity = _to_float(equity_rows[-1].get("equity"),
+                             starting_balance if starting_balance > 0 else 1.0) if equity_rows else (
+        starting_balance if starting_balance > 0 else 1.0)
     initial_equity = starting_balance if starting_balance > 0 else 1.0
     reconcile_delta = (final_equity - initial_equity) - pnl_sum
     mfe_mae_sanity_fail = 0
@@ -2342,10 +2829,16 @@ def _export_run_report(
             "trade_count": len(trade_ids),
             "entry_event_trade_count": len(entry_ids),
             "exit_event_trade_count": len(exit_ids),
-            "entry_join_coverage_pct": round(_pct(_safe_div(len(trade_ids & entry_ids), len(trade_ids))), 4) if trade_ids else 0.0,
-            "exit_join_coverage_pct": round(_pct(_safe_div(len(trade_ids & exit_ids), len(trade_ids))), 4) if trade_ids else 0.0,
-            "exactly_one_entry_per_trade_pct": round(_pct(_safe_div(sum(1 for k in trade_ids if entry_counts.get(k, 0) == 1), len(trade_ids))), 4) if trade_ids else 0.0,
-            "exactly_one_exit_per_trade_pct": round(_pct(_safe_div(sum(1 for k in trade_ids if exit_counts.get(k, 0) == 1), len(trade_ids))), 4) if trade_ids else 0.0,
+            "entry_join_coverage_pct": round(_pct(_safe_div(len(trade_ids & entry_ids), len(trade_ids))),
+                                             4) if trade_ids else 0.0,
+            "exit_join_coverage_pct": round(_pct(_safe_div(len(trade_ids & exit_ids), len(trade_ids))),
+                                            4) if trade_ids else 0.0,
+            "exactly_one_entry_per_trade_pct": round(
+                _pct(_safe_div(sum(1 for k in trade_ids if entry_counts.get(k, 0) == 1), len(trade_ids))),
+                4) if trade_ids else 0.0,
+            "exactly_one_exit_per_trade_pct": round(
+                _pct(_safe_div(sum(1 for k in trade_ids if exit_counts.get(k, 0) == 1), len(trade_ids))),
+                4) if trade_ids else 0.0,
         },
         "non_zero_check": {
             "mfe_non_zero_count": non_zero_mfe,
@@ -2429,7 +2922,7 @@ def main() -> None:
     execution = load_last_execution()
     if not execution:
         print(f"No valid execution result found in: {LAST_RESULT_FILE}")
-        print("Run freqtrade_executor.py first.")
+        print("Run freqtrade_hyperopts_backtest_executor.py first.")
         return
 
     strategy_name, stem = execution
@@ -2455,25 +2948,8 @@ def main() -> None:
     timeframe = str(strategy_data.get("timeframe") or "N/A")
     normalized_trades = _normalize_trades(trades, timeframe)
 
+    # PNG export is disabled for this workflow.
     chart_paths: list[str] = []
-    if (
-        EXPORT_TRADE_CHART
-        and artifacts.json_path
-        and artifacts.signals_path
-        and artifacts.signals_path.lower().endswith(".pkl")
-    ):
-        try:
-            chart_out = os.path.join(CHARTS_DIR, f"chart_{stem}_{strategy_name}.png")
-            out_path = export_freqtrade_trade_point_chart_png(
-                backtest_json_path=artifacts.json_path,
-                signals_pkl_path=artifacts.signals_path,
-                strategy_name=strategy_name,
-                timerange=TIMERANGE,
-                output_path=chart_out,
-            )
-            chart_paths.append(out_path)
-        except Exception as e:
-            print(f"Chart export failed: {e}")
 
     report_dir, output_files, summary, diagnostics = _export_run_report(
         stem=stem,
@@ -2484,20 +2960,20 @@ def main() -> None:
     )
     report_zip = _compress_report_dir(report_dir)
 
-    md = build_backtest_markdown(
-        strategy_name=strategy_name,
-        timerange=TIMERANGE,
-        artifacts=artifacts,
-        perf=perf,
-        gate_stats=gate_stats,
-        diagnostics=diagnostics,
-        trades=trades,
-        chart_paths=chart_paths,
-    )
-    pyperclip.copy(md)
+    # md = build_backtest_markdown(
+    #     strategy_name=strategy_name,
+    #     timerange=TIMERANGE,
+    #     artifacts=artifacts,
+    #     perf=perf,
+    #     gate_stats=gate_stats,
+    #     diagnostics=diagnostics,
+    #     trades=trades,
+    #     chart_paths=chart_paths,
+    # )
+    # pyperclip.copy(md)
 
     print("\n" + "=" * 60)
-    print("Analysis completed. Markdown copied to clipboard.")
+    print("Analysis completed.")
     print(f"Report archive: {report_zip}")
     print(f"Removed uncompressed report directory: {report_dir}")
     print(f"Archived artifacts count: {len(output_files)}")
