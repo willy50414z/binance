@@ -5,15 +5,13 @@ import sys
 import os
 
 # Ensure the project root is in sys.path
-# Assuming we run from e:\code\binance
 project_root = os.getcwd()
 if project_root not in sys.path:
     sys.path.append(project_root)
 
 # Also try to compute it relative to the file
 file_path = os.path.abspath(__file__)
-# e:\code\binance\com\willy\binance\ml\test_bitcoin_model.py
-# Go up 5 levels to get e:\code\binance
+# Go up 5 levels to get the project root
 root_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(file_path)))))
 if root_path not in sys.path:
     sys.path.append(root_path)

@@ -1,17 +1,18 @@
-
-import sys
 import os
+import sys
 import pandas as pd
 from datetime import datetime, timedelta, timezone
 
 # Ensure project root is in sys.path
-project_root = os.getcwd()
-if project_root not in sys.path:
-    sys.path.append(project_root)
+repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
+if repo_root not in sys.path:
+    sys.path.append(repo_root)
 
-# Try also adding com parent
-if 'e:\\code\\binance' not in sys.path:
-    sys.path.append('e:\\code\\binance')
+from com.willy.binance.config.config_util import config_util
+
+configured_root = config_util("project.path").get("root_dir")
+if configured_root not in sys.path:
+    sys.path.append(configured_root)
 
 from com.willy.binance.service.binance_svc import BinanceSvc
 from com.willy.binance.enums.binance_product import BinanceProduct
