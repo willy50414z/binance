@@ -1,13 +1,21 @@
 import glob
 import os
+import sys
 
 import pyperclip
+
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+
+from com.willy.binance.config.config_util import config_util
 
 
 class PlanPromptGenerator:
     VERSION = 3
     STRATEGY_CODE = "AMRS"
-    BASE_PATH = r"E:\code\binance\com\willy\binance\freqtrade\strategy"
+    ROOT_DIR = os.path.normpath(config_util("project.path").get("root_dir"))
+    BASE_PATH = os.path.join(ROOT_DIR, "com", "willy", "binance", "freqtrade", "strategy")
 
     @staticmethod
     def get_clipboard():

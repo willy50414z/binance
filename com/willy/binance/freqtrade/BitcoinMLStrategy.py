@@ -7,8 +7,6 @@ from pandas import DataFrame
 from freqtrade.strategy import IStrategy, IntParameter
 
 # Add project root to path to find the ml module
-# Strategy is in e:\code\binance\com\willy\binance\freqtrade\BitcoinMLStrategy.py
-# Root is e:\code\binance
 current_file = os.path.abspath(__file__)
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(current_file)))))
 if project_root not in sys.path:
@@ -55,7 +53,6 @@ class BitcoinMLStrategy(IStrategy):
         if BitcoinTradingModel is not None:
             self.model = BitcoinTradingModel()
             # Construct path to model file
-            # e:\code\binance\com\willy\binance\ml\models\bitcoin_model_v1.pkl
             model_path = os.path.join(project_root, 'com', 'willy', 'binance', 'ml', 'models', 'bitcoin_model_v1.pkl')
             
             if os.path.exists(model_path):

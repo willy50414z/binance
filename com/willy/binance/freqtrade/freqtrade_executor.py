@@ -14,11 +14,15 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", 
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-RESULTS_DIR = r"E:\code\binance\com\willy\binance\freqtrade\user_data\backtest_results"
-USERDIR = r"E:\code\binance\com\willy\binance\freqtrade\user_data"
-STRATEGY_PATH = r"E:\code\binance\com\willy\binance\freqtrade\strategy\AMRS(ATR-Driven Mean Reversion Short"
+from com.willy.binance.config.config_util import config_util
+
+ROOT_DIR = os.path.normpath(config_util("project.path").get("root_dir"))
+FREQTRADE_DIR = os.path.join(ROOT_DIR, "com", "willy", "binance", "freqtrade")
+RESULTS_DIR = os.path.join(FREQTRADE_DIR, "user_data", "backtest_results")
+USERDIR = os.path.join(FREQTRADE_DIR, "user_data")
+STRATEGY_PATH = os.path.join(FREQTRADE_DIR, "strategy", "AMRS(ATR-Driven Mean Reversion Short")
 TIMERANGE = "20240101-20261231"
-CONFIG_PATH = r"E:\code\binance\com\willy\binance\freqtrade\config.json"
+CONFIG_PATH = os.path.join(FREQTRADE_DIR, "config.json")
 
 MODE = "backtesting"  # Options: "backtesting" or "hyperopt"
 HYPEROPT_EPOCHS = 100
