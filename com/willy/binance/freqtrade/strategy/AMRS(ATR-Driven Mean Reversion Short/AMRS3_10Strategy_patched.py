@@ -60,6 +60,11 @@ class AMRS3_10Strategy_patched(IStrategy):
     # B) MA7 downtrend streak (N=0 => off)
     ma7_downtrend_candles = IntParameter(0, 24, default=6, space="buy")
 
+    # B2) MA slope filter
+    use_ma_slope_filter = BooleanParameter(default=False, space="buy")
+    ma25_slope_candles = IntParameter(0, 12, default=0, space="buy")
+    ma99_slope_candles = IntParameter(0, 12, default=0, space="buy")
+
     # C) Relative volume filter
     use_volume_filter = BooleanParameter(default=False, space="buy")
     volume_filter_mode = CategoricalParameter(["avoid_spike", "band"], default="avoid_spike", space="buy")
@@ -122,28 +127,29 @@ class AMRS3_10Strategy_patched(IStrategy):
           - {"params": {"param_name": value, ...}}
           - {"param_name": value, ...}
         """
-        self._load_param_overrides_from_env()
+        param_file, applied = self._load_param_overrides_from_env()
+        self._log_effective_params(param_file, applied)
 
-    def _load_param_overrides_from_env(self) -> None:
+    def _load_param_overrides_from_env(self) -> tuple[str, int]:
         param_file = os.getenv("STRATEGY_PARAM_FILE")
         if not param_file:
-            return
+            return "", 0
 
         p = Path(param_file).expanduser()
         if not p.exists() or not p.is_file():
             LOGGER.warning("STRATEGY_PARAM_FILE=%s not found or not a file.", param_file)
-            return
+            return str(p), 0
 
         try:
             raw = json.loads(p.read_text(encoding="utf-8"))
         except Exception as e:
             LOGGER.exception("Failed to read STRATEGY_PARAM_FILE=%s: %s", str(p), e)
-            return
+            return str(p), 0
 
         overrides = raw.get("params", raw) if isinstance(raw, dict) else None
         if not isinstance(overrides, dict):
             LOGGER.warning("STRATEGY_PARAM_FILE=%s has invalid JSON structure (expect dict).", str(p))
-            return
+            return str(p), 0
 
         applied = 0
         for key, val in overrides.items():
@@ -172,6 +178,33 @@ class AMRS3_10Strategy_patched(IStrategy):
                 LOGGER.warning("Failed to apply override %s=%r: %s", key, val, e)
 
         LOGGER.info("Applied %d strategy param overrides from %s", applied, str(p))
+        return str(p), applied
+
+    def _log_effective_params(self, param_file: str, applied: int) -> None:
+        LOGGER.info(
+            "Strategy bootstrap class=%s file=%s STRATEGY_PARAM_FILE=%s applied_keys=%d",
+            self.__class__.__name__,
+            __file__,
+            param_file or "",
+            applied,
+        )
+        LOGGER.info(
+            "Effective params: use_ma_gap_filter=%s min_ma7_ma25_gap=%s min_ma25_ma99_gap=%s "
+            "ma7_downtrend_candles=%s use_ma_slope_filter=%s ma25_slope_candles=%s ma99_slope_candles=%s "
+            "use_volume_filter=%s vol_ratio_max=%s exit_mode=%s exit_ma7_confirm_candles=%s min_hold_candles=%s",
+            self.use_ma_gap_filter.value,
+            self.min_ma7_ma25_gap.value,
+            self.min_ma25_ma99_gap.value,
+            self.ma7_downtrend_candles.value,
+            self.use_ma_slope_filter.value,
+            self.ma25_slope_candles.value,
+            self.ma99_slope_candles.value,
+            self.use_volume_filter.value,
+            self.vol_ratio_max.value,
+            self.exit_mode.value,
+            self.exit_ma7_confirm_candles.value,
+            self.min_hold_candles.value,
+        )
 
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         dataframe["ma7"] = ta.SMA(dataframe, timeperiod=7)
@@ -262,6 +295,16 @@ class AMRS3_10Strategy_patched(IStrategy):
         else:
             cond_ma7_down = self._true_series(dataframe)
 
+        # B2) MA25/MA99 slope gate
+        if self.use_ma_slope_filter.value:
+            n25 = max(1, int(self.ma25_slope_candles.value))
+            n99 = max(1, int(self.ma99_slope_candles.value))
+            cond_ma25_down = (dataframe["ma25_slope"] < 0).rolling(window=n25).sum() >= n25
+            cond_ma99_down = (dataframe["ma99"].diff() < 0).rolling(window=n99).sum() >= n99
+            cond_ma_slope = cond_ma25_down & cond_ma99_down
+        else:
+            cond_ma_slope = self._true_series(dataframe)
+
         # C) Relative volume filter
         if self.use_volume_filter.value:
             if self.volume_filter_mode.value == "band":
@@ -285,6 +328,7 @@ class AMRS3_10Strategy_patched(IStrategy):
             & cond_ma_gap
             & cond_price_dist
             & cond_ma7_down
+            & cond_ma_slope
             & cond_volume
         )
 

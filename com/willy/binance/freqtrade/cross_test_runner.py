@@ -2,6 +2,7 @@ import argparse
 import csv
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -40,6 +41,15 @@ def _to_float(v: Any) -> float | None:
         return None
 
 
+def _to_int(v: Any) -> int | None:
+    try:
+        if v is None:
+            return None
+        return int(float(v))
+    except Exception:
+        return None
+
+
 def load_plan(path: Path) -> dict[str, Any]:
     data = json.loads(path.read_text(encoding="utf-8"))
 
@@ -63,6 +73,7 @@ def load_plan(path: Path) -> dict[str, Any]:
     data.setdefault("freqtrade_bin", "freqtrade")
     data.setdefault("results_dir", str(Path(data["userdir"]) / "backtest_results"))
     data.setdefault("retry", {"max_attempts": 3, "backoff_seconds": [60, 120, 240]})
+    data.setdefault("min_val_trades_for_ranking", 50)
     data.setdefault("hyperopt", {"enabled": False, "epochs": 50, "loss": "SortinoHyperOptLoss", "spaces": ["buy", "sell"], "jobs": 4})
     return data
 
@@ -82,6 +93,7 @@ def run_cmd(cmd: list[str], env: dict[str, str], log_path: Path) -> CmdResult:
 
     with log_path.open("w", encoding="utf-8", errors="replace") as f:
         f.write(f"$ {' '.join(cmd)}\n")
+        f.write(f"STRATEGY_PARAM_FILE={env.get('STRATEGY_PARAM_FILE', '')}\n")
         f.flush()
         proc = subprocess.Popen(
             cmd,
@@ -135,6 +147,27 @@ def parse_hyperopt_best_params(hyperopt_results_dir: Path, log_path: Path) -> di
     _ = hyperopt_results_dir
     _ = log_path
     return {"params": {}}
+
+
+def extract_resolved_strategy_info(log_path: Path) -> dict[str, str]:
+    info = {"strategy_class": "", "strategy_file": ""}
+    if not log_path.exists():
+        return info
+
+    text = log_path.read_text(encoding="utf-8", errors="replace")
+    patterns = [
+        r"Using resolved strategy\s+(\w+)\s+from\s+'([^']+\.py)'",
+        r'Using resolved strategy\s+(\w+)\s+from\s+"([^"]+\.py)"',
+        r"Found strategy\s+(\w+)\s+in\s+(.+?\.py)",
+        r"Loading strategy\s+(\w+).*?(.+?\.py)",
+    ]
+    for pat in patterns:
+        m = re.search(pat, text, flags=re.IGNORECASE | re.DOTALL)
+        if m:
+            info["strategy_class"] = (m.group(1) or "").strip()
+            info["strategy_file"] = (m.group(2) or "").strip()
+            return info
+    return info
 
 
 def run_hyperopt(plan: dict[str, Any], run_dirs: dict[str, Path], exp_id: str, env: dict[str, str]) -> tuple[dict[str, Any], CmdResult]:
@@ -315,6 +348,10 @@ def _rows_to_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "val_zip",
         "train_log",
         "val_log",
+        "train_strategy_class",
+        "train_strategy_file",
+        "val_strategy_class",
+        "val_strategy_file",
         "overrides",
     ]
     with path.open("w", newline="", encoding="utf-8") as f:
@@ -352,6 +389,10 @@ def _run_one_experiment(
         "status": "ok",
         "params_file": str(params_file),
         "overrides": json.dumps(overrides, ensure_ascii=False),
+        "train_strategy_class": "",
+        "train_strategy_file": "",
+        "val_strategy_class": "",
+        "val_strategy_file": "",
     }
 
     if bool((plan.get("hyperopt") or {}).get("enabled", False)):
@@ -377,6 +418,9 @@ def _run_one_experiment(
         extra_args=[str(x) for x in (exp.get("extra_backtest_args") or [])],
     )
     row["train_log"] = str(train_res.log_path)
+    train_info = extract_resolved_strategy_info(train_res.log_path)
+    row["train_strategy_class"] = train_info.get("strategy_class", "")
+    row["train_strategy_file"] = train_info.get("strategy_file", "")
     if train_res.rc != 0 or train_zip is None:
         row["status"] = "train_failed"
         return row
@@ -399,6 +443,9 @@ def _run_one_experiment(
         extra_args=[str(x) for x in (exp.get("extra_backtest_args") or [])],
     )
     row["val_log"] = str(val_res.log_path)
+    val_info = extract_resolved_strategy_info(val_res.log_path)
+    row["val_strategy_class"] = val_info.get("strategy_class", "")
+    row["val_strategy_file"] = val_info.get("strategy_file", "")
     if val_res.rc != 0 or val_zip is None:
         row["status"] = "val_failed"
         return row
@@ -486,11 +533,20 @@ def main() -> None:
         stage1_rows.append(_run_one_experiment(plan, run_dirs, base_env, exp, stage=1))
     all_rows.extend(stage1_rows)
 
+    min_val_trades = int(plan.get("min_val_trades_for_ranking", 50))
     ok_stage1 = [r for r in stage1_rows if r.get("status") == "ok"]
-    ok_stage1_sorted = sorted(ok_stage1, key=_rank_tuple_for_val, reverse=True)
+    ranked_pool = [r for r in ok_stage1 if (_to_int(r.get("val_trades")) or 0) >= min_val_trades]
+    ok_stage1_sorted = sorted(ranked_pool, key=_rank_tuple_for_val, reverse=True)
 
     # Stage2 (auto)
-    stage2_exps = _build_stage2_experiments(ok_stage1_sorted)
+    stage2_exps: list[dict[str, Any]] = []
+    if len(ok_stage1_sorted) < 2:
+        print(
+            f"[warn] Stage2 skipped: only {len(ok_stage1_sorted)} stage1 candidates meet "
+            f"min_val_trades_for_ranking={min_val_trades}."
+        )
+    else:
+        stage2_exps = _build_stage2_experiments(ok_stage1_sorted)
     stage2_rows: list[dict[str, Any]] = []
     for exp in stage2_exps:
         stage2_rows.append(_run_one_experiment(plan, run_dirs, base_env, exp, stage=2))
