@@ -5,7 +5,7 @@ robocopy com target/com /MIR
 xcopy "build\Dockerfile" "target" /E /I /Y
 
 cd target
-pip install -r requirements.txt
+pip freeze > requirements.txt
 docker build -t ma_7_25_break .
 docker container rm -f ma_7_25_break
 docker run --name ma_7_25_break -p 9000:8080 -d ma_7_25_break
