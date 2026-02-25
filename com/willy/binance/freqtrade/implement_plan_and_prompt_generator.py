@@ -12,7 +12,7 @@ from com.willy.binance.config.config_util import config_util
 
 
 class PlanPromptGenerator:
-    VERSION = 3
+    VERSION = 4
     STRATEGY_CODE = "AMRS"
     ROOT_DIR = os.path.normpath(config_util("project.path").get("root_dir"))
     BASE_PATH = os.path.join(ROOT_DIR, "com", "willy", "binance", "freqtrade", "strategy")
@@ -59,10 +59,10 @@ class PlanPromptGenerator:
 
     @classmethod
     def generate_prompt(cls, folder, x):
-        prev_strategy = f"com/willy/binance/freqtrade/strategy/{folder}/AMRS{cls.VERSION}_{x - 1}Strategy.py"
-        plan_md = f"com/willy/binance/freqtrade/strategy/{folder}/implement_plan/AMRS{cls.VERSION}_{x}.md"
-        new_strategy = f"com/willy/binance/freqtrade/strategy/{folder}/AMRS{cls.VERSION}_{x}Strategy.py"
-        executor = "com/willy/binance/freqtrade/freqtrade_executor.py"
+        prev_strategy = f"{cls.ROOT_DIR}/com/willy/binance/freqtrade/strategy/{folder}/AMRS{cls.VERSION}_{x - 1}Strategy.py"
+        plan_md = f"{cls.ROOT_DIR}/com/willy/binance/freqtrade/strategy/{folder}/implement_plan/AMRS{cls.VERSION}_{x}.md"
+        new_strategy = f"{cls.ROOT_DIR}/com/willy/binance/freqtrade/strategy/{folder}/AMRS{cls.VERSION}_{x}Strategy.py"
+        executor = f"{cls.ROOT_DIR}/com/willy/binance/freqtrade/freqtrade_executor.py"
         prompt = f"請參考{prev_strategy}，\n並依據{plan_md}\n修改成{new_strategy}，\n並執行{executor}進行回測，再執行analyze_backtest_result.py產出分析報告"
         return prompt
 

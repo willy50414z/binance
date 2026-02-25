@@ -32,7 +32,7 @@ RUN_HYPEROPT_BEFORE_BACKTESTING = False
 
 # Multi-strategy support (kept minimal on purpose).
 STRATEGIES = [
-    "AMRS3_7Strategy",
+    "AMRS4_1Strategy",
 ]
 
 # Backtesting CLI supports exporting only one artifact at a time (trades OR signals) in your current version.
