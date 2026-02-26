@@ -40,7 +40,7 @@ class AMRS3_10Strategy_patched(IStrategy):
     use_exit_signal = True
     exit_profit_only = False
     ignore_roi_if_entry_signal = False
-    use_custom_stoploss = True
+    use_custom_stoploss = False
 
     startup_candle_count: int = 260
 
@@ -76,7 +76,10 @@ class AMRS3_10Strategy_patched(IStrategy):
     # D) Exit anti-whipsaw
     exit_mode = CategoricalParameter(["ma7", "ma7_confirm"], default="ma7_confirm", space="sell")
     exit_ma7_confirm_candles = IntParameter(2, 6, default=3, space="sell")
-    min_hold_candles = IntParameter(0, 12, default=0, space="sell")
+    min_hold_candles = IntParameter(0, 60, default=0, space="sell")
+    hold_release_mode = CategoricalParameter(["none", "loss_only", "loss_or_profit"], default="loss_only", space="sell")
+    hold_loss_release = DecimalParameter(0.005, 0.05, default=0.02, decimals=3, space="sell")
+    hold_profit_release = DecimalParameter(0.002, 0.05, default=0.01, decimals=3, space="sell")
 
     # Dynamic ATR risk control
     base_sl_atr = DecimalParameter(0.8, 2.0, default=1.2, space="sell")
@@ -128,7 +131,32 @@ class AMRS3_10Strategy_patched(IStrategy):
           - {"param_name": value, ...}
         """
         param_file, applied = self._load_param_overrides_from_env()
+        self._assert_stage4_runtime_safety()
         self._log_effective_params(param_file, applied)
+
+    def _runtime_trailing_stop_enabled(self) -> bool:
+        runtime_value = bool(getattr(self, "trailing_stop", False))
+        config_dict = getattr(self, "config", None)
+        cfg_value = None
+        if isinstance(config_dict, dict):
+            cfg_value = config_dict.get("trailing_stop")
+
+        if cfg_value is None:
+            return runtime_value
+
+        try:
+            return runtime_value or self._parse_bool(cfg_value)
+        except Exception:
+            LOGGER.warning("Invalid trailing_stop value in config: %r", cfg_value)
+            return runtime_value
+
+    def _assert_stage4_runtime_safety(self) -> None:
+        if not self._runtime_trailing_stop_enabled():
+            return
+
+        msg = "Trailing stop is enabled but Stage4 expects MA exit."
+        LOGGER.error(msg)
+        raise ValueError(msg)
 
     def _load_param_overrides_from_env(self) -> tuple[str, int]:
         param_file = os.getenv("STRATEGY_PARAM_FILE")
@@ -180,31 +208,26 @@ class AMRS3_10Strategy_patched(IStrategy):
         LOGGER.info("Applied %d strategy param overrides from %s", applied, str(p))
         return str(p), applied
 
+    def _effective_params_payload(self) -> dict:
+        return {
+            "use_ma_slope_filter": bool(self.use_ma_slope_filter.value),
+            "ma25_slope_candles": int(self.ma25_slope_candles.value),
+            "ma99_slope_candles": int(self.ma99_slope_candles.value),
+            "exit_mode": str(self.exit_mode.value),
+            "exit_ma7_confirm_candles": int(self.exit_ma7_confirm_candles.value),
+            "min_hold_candles": int(self.min_hold_candles.value),
+            "hold_release_mode": str(self.hold_release_mode.value),
+            "hold_loss_release": float(self.hold_loss_release.value),
+            "hold_profit_release": float(self.hold_profit_release.value),
+            "trailing_stop": bool(getattr(self, "trailing_stop", False)),
+        }
+
     def _log_effective_params(self, param_file: str, applied: int) -> None:
-        LOGGER.info(
-            "Strategy bootstrap class=%s file=%s STRATEGY_PARAM_FILE=%s applied_keys=%d",
-            self.__class__.__name__,
-            __file__,
-            param_file or "",
-            applied,
-        )
-        LOGGER.info(
-            "Effective params: use_ma_gap_filter=%s min_ma7_ma25_gap=%s min_ma25_ma99_gap=%s "
-            "ma7_downtrend_candles=%s use_ma_slope_filter=%s ma25_slope_candles=%s ma99_slope_candles=%s "
-            "use_volume_filter=%s vol_ratio_max=%s exit_mode=%s exit_ma7_confirm_candles=%s min_hold_candles=%s",
-            self.use_ma_gap_filter.value,
-            self.min_ma7_ma25_gap.value,
-            self.min_ma25_ma99_gap.value,
-            self.ma7_downtrend_candles.value,
-            self.use_ma_slope_filter.value,
-            self.ma25_slope_candles.value,
-            self.ma99_slope_candles.value,
-            self.use_volume_filter.value,
-            self.vol_ratio_max.value,
-            self.exit_mode.value,
-            self.exit_ma7_confirm_candles.value,
-            self.min_hold_candles.value,
-        )
+        LOGGER.info("Strategy file: %s", __file__)
+        LOGGER.info("Strategy class: %s", self.__class__.__name__)
+        LOGGER.info("STRATEGY_PARAM_FILE=%s", param_file or "")
+        LOGGER.info("Applied override keys: %d", applied)
+        LOGGER.info("Effective params: %s", json.dumps(self._effective_params_payload(), ensure_ascii=False, sort_keys=True))
 
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         dataframe["ma7"] = ta.SMA(dataframe, timeperiod=7)
@@ -338,15 +361,211 @@ class AMRS3_10Strategy_patched(IStrategy):
     def populate_exit_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         dataframe["exit_long"] = 0
         dataframe["exit_short"] = 0
+        dataframe["exit_tag"] = ""
 
         if self.exit_mode.value == "ma7_confirm":
             confirm_n = int(self.exit_ma7_confirm_candles.value)
             cond_exit = dataframe["above_ma7_streak"] >= confirm_n
+            exit_tag = "ma7_confirm"
         else:
             cond_exit = dataframe["above_ma7"]
+            exit_tag = "ma7"
 
         dataframe.loc[cond_exit.fillna(False), "exit_short"] = 1
+        dataframe.loc[cond_exit.fillna(False), "exit_tag"] = exit_tag
         return dataframe
+
+    @staticmethod
+    def _normalize_ts(value: datetime | pd.Timestamp | None) -> pd.Timestamp | None:
+        if value is None:
+            return None
+        try:
+            ts = pd.Timestamp(value)
+            if ts.tzinfo is None:
+                ts = ts.tz_localize("UTC")
+            else:
+                ts = ts.tz_convert("UTC")
+            return ts
+        except Exception:
+            return None
+
+    def _timeframe_minutes(self) -> int:
+        tf = str(getattr(self, "timeframe", "15m") or "15m").strip().lower()
+        if not tf:
+            return 15
+        unit = tf[-1]
+        raw_value = tf[:-1]
+        try:
+            value = int(raw_value)
+        except Exception:
+            return 15
+        if value <= 0:
+            return 15
+        if unit == "m":
+            return value
+        if unit == "h":
+            return value * 60
+        if unit == "d":
+            return value * 24 * 60
+        if unit == "w":
+            return value * 7 * 24 * 60
+        return 15
+
+    def _held_candles(self, dataframe: DataFrame, trade: Trade, current_time: datetime) -> int | None:
+        now_ts = self._normalize_ts(current_time)
+        open_ts = self._normalize_ts(getattr(trade, "open_date_utc", None))
+        if now_ts is None or open_ts is None:
+            return None
+
+        timeframe_minutes = self._timeframe_minutes()
+        delta_minutes = (now_ts - open_ts).total_seconds() / 60.0
+        if delta_minutes < 0:
+            return None
+        fallback = int(delta_minutes // timeframe_minutes)
+
+        if dataframe.empty or "date" not in dataframe.columns:
+            return fallback
+
+        date_index = pd.DatetimeIndex(pd.to_datetime(dataframe["date"], utc=True, errors="coerce"))
+        if date_index.isna().all():
+            return fallback
+
+        current_idx = int(date_index.searchsorted(now_ts, side="right") - 1)
+        open_idx = int(date_index.searchsorted(open_ts, side="right") - 1)
+        if current_idx < 0 or open_idx < 0 or current_idx < open_idx:
+            return fallback
+        return current_idx - open_idx
+
+    def _is_hold_veto(
+        self,
+        pair: str,
+        trade: Trade,
+        current_time: datetime,
+        exit_reason: str | None,
+        current_profit: float | None = None,
+    ) -> bool:
+        if not trade.is_short:
+            return False
+        min_hold = max(0, int(self.min_hold_candles.value))
+        if min_hold <= 0:
+            return False
+
+        dataframe = DataFrame()
+        try:
+            dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+        except Exception:
+            dataframe = DataFrame()
+
+        held_candles = self._held_candles(dataframe, trade, current_time)
+        if held_candles is None or held_candles >= min_hold:
+            return False
+
+        mode = str(self.hold_release_mode.value)
+        loss_release = max(0.0, float(self.hold_loss_release.value))
+        profit_release = max(0.0, float(self.hold_profit_release.value))
+
+        release_reason = ""
+        cp = current_profit
+        if cp is not None:
+            if mode == "loss_only" and cp <= -loss_release:
+                release_reason = "loss_release"
+            elif mode == "loss_or_profit":
+                if cp <= -loss_release:
+                    release_reason = "loss_release"
+                elif cp >= profit_release:
+                    release_reason = "profit_release"
+        if release_reason:
+            LOGGER.info(
+                "HOLD_RELEASE: pair=%s held_candles=%s min_hold=%s current_profit=%.6f reason=%s",
+                pair,
+                held_candles,
+                min_hold,
+                cp if cp is not None else 0.0,
+                release_reason,
+            )
+            return False
+
+        cp_text = "NA" if cp is None else f"{cp:.6f}"
+        LOGGER.info(
+            "HOLD_VETO: pair=%s held_candles=%s min_hold=%s current_profit=%s exit_reason=%s mode=%s",
+            pair,
+            held_candles,
+            min_hold,
+            cp_text,
+            str(exit_reason or ""),
+            mode,
+        )
+        return True
+
+    def custom_exit(
+        self,
+        pair: str,
+        trade: Trade,
+        current_time: datetime,
+        current_rate: float,
+        current_profit: float,
+        **kwargs,
+    ) -> str | None:
+        if not trade.is_short:
+            return None
+
+        dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+        if dataframe.empty:
+            return None
+
+        held_candles = self._held_candles(dataframe, trade, current_time)
+        min_hold = max(0, int(self.min_hold_candles.value))
+        if held_candles is not None and held_candles < min_hold:
+            return None
+
+        if self.exit_mode.value == "ma7_confirm":
+            confirm_n = max(1, int(self.exit_ma7_confirm_candles.value))
+            window = dataframe.tail(confirm_n)
+            if len(window.index) < confirm_n:
+                return None
+            cond = (window["close"] > window["ma7"]).fillna(False)
+            if bool(cond.all()):
+                return "ma7_confirm"
+            if held_candles is not None:
+                timeout_candles = max(min_hold + 16, min_hold + confirm_n * 4)
+                if held_candles >= timeout_candles:
+                    return "ma7_confirm"
+            return None
+
+        last = dataframe.iloc[-1]
+        if bool((last["close"] > last["ma7"]) if "ma7" in dataframe.columns else False):
+            return "ma7"
+        return None
+
+    def confirm_trade_exit(
+        self,
+        pair: str,
+        trade: Trade,
+        order_type: str,
+        amount: float,
+        rate: float,
+        time_in_force: str,
+        exit_reason: str,
+        current_time: datetime,
+        **kwargs,
+    ) -> bool:
+        _ = order_type
+        _ = amount
+        _ = rate
+        _ = time_in_force
+        _ = kwargs
+        current_profit = None
+        try:
+            current_profit = float(trade.calc_profit_ratio(rate))
+        except Exception:
+            current_profit = None
+        return not self._is_hold_veto(
+            pair=pair,
+            trade=trade,
+            current_time=current_time,
+            exit_reason=exit_reason,
+            current_profit=current_profit,
+        )
 
     def custom_stake_amount(
         self,
