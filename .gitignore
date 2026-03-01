@@ -10,4 +10,6 @@
 /data/
 /report/
 /htmlcov/
-/com/willy/binance/freqtrade/user_data/
+/.vscode/launch.json
+/.vscode/settings.json
+/com/willy/binance/freqtrade/user_data/**

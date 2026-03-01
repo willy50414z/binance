@@ -1,0 +1,42 @@
+{
+  "strategy_name": "AMRS2_2Strategy",
+  "params": {
+    "trailing": {
+      "trailing_stop": true,
+      "trailing_stop_positive": 0.015,
+      "trailing_stop_positive_offset": 0.03,
+      "trailing_only_offset_is_reached": true
+    },
+    "max_open_trades": {
+      "max_open_trades": 3
+    },
+    "buy": {
+      "atr_ratio_threshold": 0.537,
+      "body_lower_ratio": 0.203,
+      "body_upper_ratio": 0.77,
+      "consolidation_amplitude_ratio": 2.765,
+      "consolidation_volatility_ratio": 0.814,
+      "min_distance_ratio": 0.463,
+      "pre_drop_multiplier": 1.7,
+      "upper_shadow_ratio": 0.863,
+      "volume_burst_ratio": 1.265,
+      "volume_filter_ratio": 1.09
+    },
+    "sell": {
+      "atr_trailing_profit": 1.435,
+      "atr_trailing_stop": 0.858,
+      "ma25_offset_exit": 1.035
+    },
+    "roi": {
+      "0": 0.161,
+      "48": 0.115,
+      "217": 0.059,
+      "497": 0
+    },
+    "stoploss": {
+      "stoploss": -0.048
+    }
+  },
+  "ft_stratparam_v": 1,
+  "export_time": "2026-02-21 16:03:53.534746+00:00"
+}
