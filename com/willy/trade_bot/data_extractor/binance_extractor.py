@@ -5,6 +5,7 @@ from binance import Client
 
 from com.willy.binance.config import const
 from com.willy.trade_bot.dto.backtest_config import BackTestConfig
+from com.willy.trade_bot.dto.crypto_extractor_dto import CryptoExtractorDto
 from com.willy.trade_bot.enums.market_type import MarketType
 from com.willy.trade_bot.enums.product import Product
 from com.willy.trade_bot.utils import type_utils
@@ -18,11 +19,10 @@ def parse_datetime_row(row):
 
 class BinanceExtractor:
 
-    def __init__(self, back_test_config: BackTestConfig):
+    def __init__(self):
         self.client = Client("", "")
-        self.back_test_config = back_test_config
 
-    def extract(self) -> pd.DataFrame:
+    def extract(self, extractor_dto: CryptoExtractorDto) -> pd.DataFrame:
         """
         主要抓取流程：
         1. 檢查並讀取現有的 .feature 檔案
@@ -31,18 +31,18 @@ class BinanceExtractor:
         4. 合併新舊資料並儲顯
         5. 回傳請求時間範圍內的 DataFrame
         """
-        output_path = self._get_feature_file_path()
-        existing_df = self._load_existing_feature(output_path)
+        output_path = self._get_feature_file_path(extractor_dto)
+        existing_df = self._load_existing_feature(output_path, extractor_dto)
 
-        start_dt = self.back_test_config.start_dt
-        end_dt = self.back_test_config.end_dt
+        start_dt = extractor_dto.start_dt
+        end_dt = extractor_dto.end_dt
 
         # 檢查是否需要抓取新資料 (若現有資料已包含請求範圍則跳過)
         fetch_ranges = self._calculate_fetch_ranges(existing_df, start_dt, end_dt)
 
         df = existing_df
         if fetch_ranges:
-            new_data_df = self._fetch_and_process_data(fetch_ranges)
+            new_data_df = self._fetch_and_process_data(fetch_ranges, extractor_dto)
 
             if new_data_df is not None and not new_data_df.empty:
                 df = self._merge_and_save_data(existing_df, new_data_df, output_path)
@@ -55,16 +55,16 @@ class BinanceExtractor:
 
         return pd.DataFrame()
 
-    def _get_feature_file_path(self):
+    def _get_feature_file_path(self, extractor_dto: CryptoExtractorDto):
         """建構 .feature 檔案的路徑"""
         trade_bot_data_dir = const.PROJECT_DIR / "com/willy/trade_bot/data"
-        output_dir = trade_bot_data_dir / self.back_test_config.exchange.name / self.back_test_config.market_type.name
+        output_dir = trade_bot_data_dir / extractor_dto.exchange.name / extractor_dto.market_type.name
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        file_name = f"{self.back_test_config.product.name}_{self.back_test_config.timeframe.value}.feature"
+        file_name = f"{extractor_dto.product.name}_{extractor_dto.timeframe.value}.feature"
         return output_dir / file_name
 
-    def _load_existing_feature(self, file_path) -> pd.DataFrame:
+    def _load_existing_feature(self, file_path, extractor_dto: CryptoExtractorDto) -> pd.DataFrame:
         """讀取現有的 .feature 檔案"""
         if not file_path.exists():
             return None
@@ -76,7 +76,7 @@ class BinanceExtractor:
             df = df.set_index('start_time', drop=False).sort_index()
 
             # 若 config 的時間是 timezone-aware，確保讀出來的 df index 也是 (補上 UTC)
-            start_dt = self.back_test_config.start_dt
+            start_dt = extractor_dto.start_dt
             if start_dt.tzinfo is not None and len(df) > 0:
                 if df.index[0].tzinfo is None:
                     df.index = df.index.tz_localize('UTC')
@@ -110,20 +110,20 @@ class BinanceExtractor:
             # 無現有資料，抓取全部範圍
             return [(start_dt, end_dt)]
 
-    def _fetch_and_process_data(self, fetch_ranges) -> pd.DataFrame:
+    def _fetch_and_process_data(self, fetch_ranges, extractor_dto: CryptoExtractorDto) -> pd.DataFrame:
         """根據時間範圍抓取 raw data 並轉換為 DataFrame"""
-        timeframe = self.back_test_config.timeframe.value
-        product = self.back_test_config.product
+        timeframe = extractor_dto.timeframe.value
+        product = extractor_dto.product
         new_data_frames = []
 
         for qs, qe in fetch_ranges:
             raw_data = []
-            if self.back_test_config.market_type == MarketType.FUTURE:
+            if extractor_dto.market_type == MarketType.FUTURE:
                 raw_data = self._get_futures_klines(product, timeframe, qs, qe)
-            elif self.back_test_config.market_type == MarketType.SPOT:
+            elif extractor_dto.market_type == MarketType.SPOT:
                 raw_data = self._get_historical_klines_df(product, timeframe, qs, qe)
             else:
-                raise ValueError(f"不支援的市場類型: {self.back_test_config.market_type}")
+                raise ValueError(f"不支援的市場類型: {extractor_dto.market_type}")
 
             if raw_data:
                 chunk_df = self._convert_raw_to_df(raw_data)
@@ -190,4 +190,12 @@ class BinanceExtractor:
 
 
 def extract(back_test_config: BackTestConfig):
-    return BinanceExtractor(back_test_config).extract()
+    extractor_dto = CryptoExtractorDto(
+        exchange=back_test_config.exchange,
+        product=back_test_config.product,
+        market_type=back_test_config.market_type,
+        timeframe=back_test_config.timeframe,
+        start_dt=back_test_config.start_dt,
+        end_dt=back_test_config.end_dt
+    )
+    return BinanceExtractor().extract(extractor_dto)
