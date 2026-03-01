@@ -689,6 +689,7 @@ def export_freqtrade_trade_point_chart_html(
         output_html_path: str,
         output_points_csv_path: str,
         pair: str | None = None,
+        summary: dict[str, Any] | None = None,
 ) -> tuple[str, str, str, int]:
     try:
         import pandas as pd  # type: ignore
@@ -984,9 +985,13 @@ def export_freqtrade_trade_point_chart_html(
             continue
 
         ts_label = ts_list[pos]
-        y_value = close_list[pos] if pos < len(close_list) else p.get("price")
-        color = "#2EBD85" if p.get("side") == "BUY" else "#F6465D"
         trade_price = _to_float(p.get("price"), 0.0)
+        # Use actual trade price for markpoint y-coordinate.
+        # Using candle close causes entry/exit at the same timestamp to overlap and hide each other.
+        y_value = trade_price if trade_price > 0 else (
+            close_list[pos] if pos < len(close_list) else p.get("price")
+        )
+        color = "#2EBD85" if p.get("side") == "BUY" else "#F6465D"
         mark_label = f"{ts_label}\\n{p.get('side')}\\n{trade_price:.2f}"
         mark_points.append(
             opts.MarkPointItem(
@@ -1059,6 +1064,36 @@ def export_freqtrade_trade_point_chart_html(
             "</tr>"
         )
 
+    summary_rows_html = ""
+    if isinstance(summary, dict) and summary:
+        summary_items = [
+            ("total_trades", summary.get("total_trades")),
+            ("winrate_pct", summary.get("winrate_pct")),
+            ("avg_profit_pct", summary.get("avg_profit_pct")),
+            ("net_profit", summary.get("net_profit")),
+            ("profit_factor", summary.get("profit_factor")),
+            ("max_drawdown_pct", summary.get("max_drawdown_pct")),
+            ("avg_trade_duration_min", summary.get("avg_trade_duration_min")),
+            ("trades_per_day", summary.get("trades_per_day")),
+        ]
+        rows: list[str] = []
+        for key, val in summary_items:
+            rows.append(
+                "<tr>"
+                f"<td>{html_escape(str(key))}</td>"
+                f"<td>{html_escape(str(val if val is not None else 'N/A'))}</td>"
+                "</tr>"
+            )
+        summary_rows_html = (
+            "<div class='summary'>"
+            "<h2>Backtest Summary</h2>"
+            "<div class='summary-wrap'><table>"
+            "<thead><tr><th>metric</th><th>value</th></tr></thead>"
+            f"<tbody>{''.join(rows)}</tbody>"
+            "</table></div>"
+            "</div>"
+        )
+
     final_html = (
         "<!DOCTYPE html><html lang='zh-Hant'><head><meta charset='UTF-8'>"
         "<meta name='viewport' content='width=device-width, initial-scale=1.0'>"
@@ -1067,6 +1102,8 @@ def export_freqtrade_trade_point_chart_html(
         "body{font-family:Arial,sans-serif;margin:0;background:#fff;color:#222;}"
         ".page{padding:12px;box-sizing:border-box;min-height:100vh;display:flex;flex-direction:column;gap:10px;}"
         "h1,h2{margin:8px 0;}"
+        ".summary{padding:8px 10px;border:1px solid #ddd;background:#f9fbff;}"
+        ".summary-wrap{overflow:auto;max-height:220px;}"
         ".meta{padding:8px 10px;border:1px solid #ddd;background:#fafafa;}"
         ".content{display:grid;grid-template-columns:minmax(0,2fr) minmax(360px,1fr);gap:10px;flex:1;min-height:0;align-items:stretch;}"
         ".chart-pane{border:1px solid #ddd;padding:8px;overflow:hidden;height:700px;box-sizing:border-box;}"
@@ -1080,6 +1117,7 @@ def export_freqtrade_trade_point_chart_html(
         "@media (max-width: 1200px){.content{grid-template-columns:1fr;}.chart-pane,.table-pane{height:560px;}}"
         "</style></head><body><div class='page'>"
         f"<h1>Trade Points</h1>"
+        f"{summary_rows_html}"
         f"<div class='meta'><b>Strategy:</b> {html_escape(strategy_name)} "
         f"<b>Pair:</b> {html_escape(selected_pair)} "
         f"<b>Points:</b> {len(points)} "
@@ -1352,6 +1390,14 @@ def _hash_file(path: str | None) -> str:
                 break
             h.update(chunk)
     return h.hexdigest()
+
+
+def _sanitize_filename_component(value: str) -> str:
+    safe = "".join(ch if ch.isalnum() or ch in ("-", "_", ".") else "_" for ch in str(value).strip())
+    while "__" in safe:
+        safe = safe.replace("__", "_")
+    safe = safe.strip("._")
+    return safe or "unknown"
 
 
 def _git_commit_hash() -> str:
@@ -2663,6 +2709,7 @@ def _export_run_report(
             starting_balance=starting_balance,
             output_html_path=chart_html_path,
             output_points_csv_path=points_csv_path,
+            summary=summary,
         )
         outputs.append(chart_html_path)
         outputs.append(points_csv)
@@ -2680,6 +2727,12 @@ def _export_run_report(
     with open(run_meta_path, "w", encoding="utf-8") as f:
         json.dump(run_meta, f, indent=2, ensure_ascii=False)
     outputs.append(run_meta_path)
+
+    if strategy_file and os.path.exists(strategy_file):
+        strategy_copy_name = f"strategy_{_sanitize_filename_component(strategy_name)}.py"
+        strategy_copy_path = os.path.join(report_dir, strategy_copy_name)
+        shutil.copy2(strategy_file, strategy_copy_path)
+        outputs.append(strategy_copy_path)
 
     trades_path = os.path.join(report_dir, "trades.csv")
     _write_csv(trades_path, [
@@ -2878,13 +2931,14 @@ def _export_run_report(
     return report_dir, outputs, summary, diagnostics
 
 
-def _compress_report_dir(report_dir: str) -> str:
+def _compress_report_dir(report_dir: str, strategy_name: str) -> str:
     if not os.path.isdir(report_dir):
         raise FileNotFoundError(f"Report directory not found: {report_dir}")
 
     parent_dir = os.path.dirname(report_dir.rstrip("\\/"))
     stem = os.path.basename(report_dir.rstrip("\\/"))
-    zip_path = os.path.join(parent_dir, f"{stem}.zip")
+    strategy_tag = _sanitize_filename_component(strategy_name)
+    zip_path = os.path.join(parent_dir, f"{stem}_{strategy_tag}.zip")
 
     if os.path.exists(zip_path):
         os.remove(zip_path)
@@ -2962,7 +3016,7 @@ def main() -> None:
         strategy_data=strategy_data if isinstance(strategy_data, dict) else {},
         trade_rows=normalized_trades,
     )
-    report_zip = _compress_report_dir(report_dir)
+    report_zip = _compress_report_dir(report_dir, strategy_name)
 
     # md = build_backtest_markdown(
     #     strategy_name=strategy_name,

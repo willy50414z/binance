@@ -20,8 +20,8 @@ ROOT_DIR = os.path.normpath(config_util("project.path").get("root_dir"))
 FREQTRADE_DIR = os.path.join(ROOT_DIR, "com", "willy", "binance", "freqtrade")
 RESULTS_DIR = os.path.join(FREQTRADE_DIR, "user_data", "backtest_results")
 USERDIR = os.path.join(FREQTRADE_DIR, "user_data")
-STRATEGY_PATH = os.path.join(FREQTRADE_DIR, "strategy", "AMRS(ATR-Driven Mean Reversion Short")
-TIMERANGE = "20240101-20261231"
+STRATEGY_PATH = os.path.join(FREQTRADE_DIR, "BTCShortMA")
+TIMERANGE = "20250101-20260101"
 CONFIG_PATH = os.path.join(FREQTRADE_DIR, "config.json")
 
 MODE = "backtesting"  # Options: "backtesting" or "hyperopt"
@@ -32,7 +32,7 @@ RUN_HYPEROPT_BEFORE_BACKTESTING = False
 
 # Multi-strategy support (kept minimal on purpose).
 STRATEGIES = [
-    "AMRS4_1Strategy",
+    "BTCShortMA_v1",
 ]
 
 # Backtesting CLI supports exporting only one artifact at a time (trades OR signals) in your current version.
