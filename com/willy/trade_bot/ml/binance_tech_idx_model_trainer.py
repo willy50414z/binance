@@ -9,6 +9,7 @@ from com.willy.trade_bot.enums.exchange import Exchange
 from com.willy.trade_bot.enums.market_type import MarketType
 from com.willy.trade_bot.enums.product import Product
 from com.willy.trade_bot.enums.timeframe import Timeframe
+from com.willy.trade_bot.service.tech_idx_svc import TECHNICAL_INDICATOR_COLUMNS, append_technical_indicators
 
 
 class BinanceTechIdxModelTrainer:
@@ -69,18 +70,25 @@ class BinanceTechIdxModelTrainer:
 
 
 def train():
-    # 數據獲取
+    # Fetch OHLCV data.
     trainer = BinanceTechIdxModelTrainer()
     ohlcv_data = trainer.fetch_ohlcv()
 
     for timeframe, df in ohlcv_data.items():
-        # 數據平穩化(FracDiff比較複雜 需要進行參數調校 先做log return)
+        # Ensure stationary transform runs before technical indicators.
         df = trainer.make_stationary(df)
+        df = append_technical_indicators(df)
+        if df is None or df.empty:
+            ohlcv_data[timeframe] = df
+            print(f"{timeframe}: rows=0")
+            continue
 
-        # 消除偏誤 (Lagging)： 將所有預測用的特徵（技術指標）向後推一格 (.shift(1))，確保模型訓練時用的是「上一根 K 線結算後」的資訊
-        df = trainer.lag_features(df, feature_columns=["log_return"])
+        # Shift features by one bar to avoid look-ahead leakage.
+        df = trainer.lag_features(df, feature_columns=["log_return", *TECHNICAL_INDICATOR_COLUMNS])
+        df = df.dropna(subset=["log_return", *TECHNICAL_INDICATOR_COLUMNS]).reset_index(drop=True)
+        ohlcv_data[timeframe] = df
 
-        print(f"{timeframe}: rows={len(df)}")
+        print(f"{timeframe}: rows={len(df)} column[{df.columns}]")
 
 
 if __name__ == "__main__":
