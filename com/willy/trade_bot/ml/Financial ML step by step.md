@@ -16,6 +16,8 @@
 
 - **原始價格驅動：** 在各時區獨立使用原始價格計算 RSI, MACD, Bollinger Bands 等指標。
 - **原因：** 技術指標公式基於價格絕對值，若先做平穩化會導致指標失真。
+- **本階段禁止特徵滯後：** 除了指標公式內部使用前值（如 `log_return = ln(Pt/Pt-1)`）外，不對特徵做 `.shift()`。
+- **基礎平穩特徵：** 可在此階段同步產出 `log_return`，但保留「當期值」，統一在滯後步驟再做防洩漏處理。
 
 | 指標分類                 | 指標名稱 (縮寫)           | 邏輯說明與 ML 特徵用途                                              |
 |:---------------------|:--------------------|:-----------------------------------------------------------|
@@ -53,12 +55,13 @@
 #### b. 特徵滯後 (Lagging) 處理清單
 
 **核心規則**：所有入模特徵必須執行至少 `shift(1)` 以確保模型不會「偷看」當前 K 線的結果。
+**實作等價性**：先對全部入模特徵做 `shift(1)`，再對動態特徵展開 `Lag 2~5`，等價於直接生成動態特徵的 `Lag 1~5`。
 
-| 處理類別             | 包含欄位                                                                                     | 建議動作                 | 目的                  |
-|:-----------------|:-----------------------------------------------------------------------------------------|:---------------------|:--------------------|
-| **排除 (Exclude)** | `start_time`, `open`, `high`, `low`, `close`                                             | 不進入模型訓練              | 原始價格不具平穩性，僅作計算基準。   |
-| **背景特徵**         | `ema_99_bias`, `adx_14`, `atr_scaled`                                                    | 僅執行 `shift(1)`       | 提供大時區或環境背景，不需過多歷史點。 |
-| **動態特徵**         | `log_return`, `rsi_14`, `macd_hist`, `kdj_j`, `cci_14`, `vol_pct_change`, `bb_percent_b`, `vwap_bias`, `obv_diff` | 產生 `Lag 1` 到 `Lag 5` | 捕捉短線動能變化的「形狀」與「趨勢」。 |
+| 處理類別             | 包含欄位                                                                                                                              | 建議動作                 | 目的                  |
+|:-----------------|:----------------------------------------------------------------------------------------------------------------------------------|:---------------------|:--------------------|
+| **排除 (Exclude)** | `start_time`, `open`, `high`, `low`, `close`                                                                                      | 不進入模型訓練              | 原始價格不具平穩性，僅作計算基準。   |
+| **背景特徵**         | `sma_7_bias`, `sma_25_bias`, `sma_99_bias`, `ema_7_bias`, `ema_25_bias`, `ema_99_bias`, `ema_7_25_spread`, `adx_14`, `atr_scaled` | 僅執行 `shift(1)`       | 提供大時區或環境背景，不需過多歷史點。 |
+| **動態特徵**         | `log_return`, `rsi_14`, `macd_hist`, `kdj_j`, `cci_14`, `vol_pct_change`, `bb_percent_b`, `vwap_bias`, `obv_diff`                 | 產生 `Lag 1` 到 `Lag 5` | 捕捉短線動能變化的「形狀」與「趨勢」。 |
 
 ### c. 正規化實作檢核表
 
@@ -71,37 +74,109 @@
 3. **推薦 Scaler**：
     - 震盪類 (RSI, KD)：`MinMaxScaler`
     - 動能與收益類 (Log Return, Vol)：`RobustScaler` 或 `StandardScaler`
+4. **Fit/Transform 規則**：
+    - 只對訓練集執行 `scaler.fit(train_X)`
+    - 以同一組參數做 `transform(train_X)` 與 `transform(test_X)`
+    - 禁止在完整資料或測試集上 `fit`，避免 Data Leakage
 
 #### d. 推薦實作流程 (Pipeline)
 
 1. **[指標計算]**：利用原始價格算出所有技術指標。
-2. **[特徵轉換]**：執行上述表格中的偏離度與百分比轉換（例如：`bias`, `%B`）。
-3. **[消除偏誤]**：將所有特徵欄位統一執行 `.shift(1)`。
-4. **[產生滯後]**：針對「動態特徵」透過迴圈產生 `_lag1` 至 `_lag5` 欄位。
-5. **[正規化]**：對最終特徵矩陣進行 `MinMaxScaler` 或 `StandardScaler`。
+2. **[基礎平穩]**：產出 `log_return = ln(Pt/Pt-1)`（此時不做額外 shift）。
+3. **[特徵轉換]**：執行偏離度與差值轉換（例如：`ema_bias`, `bb_percent_b`, `vwap_bias`, `obv_diff`）。
+4. **[消除偏誤]**：將所有入模特徵統一執行 `.shift(1)`。
+5. **[產生滯後]**：針對動態特徵繼續產生 `_lag2` 至 `_lag5`（連同前一步可形成完整 `lag1~lag5`）。
+6. **[定義標籤 Y]**：
+    - 回歸：`y = log_return.shift(-1)`（用當前特徵預測下一根報酬）
+    - 分類：`y = 1 if future_return > 0 else 0`（或依固定盈虧比規則）
+7. **[清理空值]**：在特徵 lag 與標籤 shift 完成後，統一 `dropna()`。
+8. **[時間切分]**：依時間序列切分（例如前 80% 訓練、後 20% 測試）。
+9. **[正規化]**：只在訓練集 `fit`，再對 train/test 同參數 `transform`。
 
-### 4. 特徵歸一化 (Normalization)：
+### 4. 定義預測目標 (Target Labeling)
+
+- **核心原則：** 使用 `shift(-1)` 將未來結果對齊到當前特徵，形成 `X_t -> Y_{t+1}`。
+- **執行時機：** 完成特徵轉換與 lag 後再建立標籤，最後再統一 `dropna()`。
+
+#### A. 回歸目標 (Regression)
+
+```python
+# 預測下一根 K 線的對數收益率
+df["target_return"] = np.log(df["close"].shift(-1) / df["close"])
+```
+
+#### B. 二元分類目標 (Binary Classification)
+
+```python
+# 下一根 K 線收盤價大於當前收盤價為 1 (漲)，否則為 0 (跌)
+df["target_trend"] = (df["close"].shift(-1) > df["close"]).astype(int)
+```
+
+#### C. 三元分類目標 (Multi-Class)
+
+```python
+threshold = 0.002  # 例如 0.2% 的漲跌幅才算數
+
+# 計算未來的實際收益率
+future_return = np.log(df["close"].shift(-1) / df["close"])
+
+# 分配標籤：1 (做多), -1 (做空), 0 (觀望)
+df["target_action"] = 0
+df.loc[future_return > threshold, "target_action"] = 1
+df.loc[future_return < -threshold, "target_action"] = -1
+```
+
+#### 實作注意事項
+
+1. 標籤只能使用未來資料（`shift(-1)`），不可混入當期或未滯後特徵。
+2. `dropna()` 必須在「特徵 lag + 標籤位移」都完成後才執行。
+3. 若使用分類閾值，建議把手續費與滑點納入 `threshold` 設計。
+
+### 5. 嚴格按時間切分資料 (Train/Test Split)
+
+時間序列資料絕對不能用隨機抽樣 (Random Split)，必須按時間先後切（例如前 80% 訓練，後 20% 測試）。
+
+```python
+split_idx = int(len(df) * 0.8)
+
+X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
+Y_train, Y_test = Y.iloc[:split_idx], Y.iloc[split_idx:]
+```
+
+### 5. 特徵歸一化 (Normalization)：
 
 原因：機器學習模型（如 SVM 或神經網路）對數值大小很敏感。
 
 作法：RSI 這種 0-100 的可以直接用，但像是 EMA 或價格，建議轉成「百分比變化」或「與價格的差值率」。
 
-### 5. 數據平穩化 (Stationary)
+```python
+from sklearn.preprocessing import RobustScaler
+
+scaler = RobustScaler()
+
+# ⚠️ 注意：只在 Train data 上 fit_transform
+X_train_scaled = scaler.fit_transform(X_train)
+
+# ⚠️ 注意：在 Test data 上只能 transform (沿用 Train 的參數)
+X_test_scaled = scaler.transform(X_test)
+```
+
+### 6. 數據平穩化 (Stationary)
 
 - **對數收益率 (Log Returns)：** 將價格轉換為 rt=ln(Pt/Pt−1)，確保模型學習的是變動規律而非絕對價格。
 - **分數階微分 (FracDiff)：** （進階選用）在保持平穩性的同時保留更多歷史記憶。
 
-### 6. 消除偏誤 (Lagging)
+### 7. 消除偏誤 (Lagging)
 
 - **特徵滯後：** 將所有「特徵列」（指標、Log Returns）執行 `.shift(1)`。
 - **目的：** 確保 t 時間點的模型只能看到 t−1 結算的資訊，防止前視偏誤（Look-ahead Bias）。
 
-### 7. 多時區整合 (Multi-Timeframe Join)
+### 8. 多時區整合 (Multi-Timeframe Join)
 
 - **主從結構：** 以 15m 為主表，利用 `pd.merge_asof` 將高時區（1h, 4h, 1d）的**已滯後特徵**併入。
 - **前向填充：** 高時區資料在未更新前使用 `ffill()` 延續。
 
-### 8. 進階標籤化：三欄式標籤 (Triple Barrier Method)
+### 9. 進階標籤化：三欄式標籤 (Triple Barrier Method)
 
 - **動態波動率：** 基於 15m 價格計算滾動標準差（或 ATR）以定義邊界。
 - **設定三道邊界：**
@@ -109,7 +184,7 @@
     2. **下軌 (Stop-Loss)：** 觸發止損標記為 `1`。
     3. **時間軌 (Vertical Barrier)：** 設定持有上限 T，到期未觸及軌道標記為 `0`（或根據當下損益決定）。
 
-### 9. 資料清理與存儲
+### 10. 資料清理與存儲
 
 - **缺失值處理：** 統一清理計算初期產生的 `NaN`。
 - **高效存儲：** 建議儲存為 **Parquet** 格式，支持 Schema 且讀寫極快。
