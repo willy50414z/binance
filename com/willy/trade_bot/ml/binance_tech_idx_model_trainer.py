@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
+import joblib
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -448,6 +449,193 @@ class BinanceTechIdxModelTrainer:
 
         return model
 
+    def train_xgboost_model_v3(self, X_train, Y_train, X_val, Y_val):
+        """
+        訓練 XGBoost 並使用 Validation Set 進行機率校準 (Calibration)
+        注意：這裡不再傳入 X_test，徹底杜絕測試集洩漏。
+        """
+        print("\n" + "=" * 40)
+        print("🚀 啟動 V3 機率校準版 XGBoost 模型 (Softprob + Calibration)")
+        print("=" * 40)
+
+        Y_train_mapped = Y_train.map({-1: 0, 0: 1, 1: 2})
+        Y_val_mapped = Y_val.map({-1: 0, 0: 1, 1: 2})
+
+        sample_weights = compute_sample_weight(class_weight='balanced', y=Y_train_mapped)
+
+        # 1. 基礎模型訓練 (指定 softprob)
+        base_model = xgb.XGBClassifier(
+            n_estimators=1500,
+            early_stopping_rounds=50,
+            max_depth=6,
+            learning_rate=0.05,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            objective='multi:softprob',  # 🌟 強制輸出真實機率分佈
+            num_class=3,
+            random_state=42,
+            n_jobs=-1,
+            eval_metric='mlogloss'
+        )
+
+        base_model.fit(
+            X_train, Y_train_mapped,
+            sample_weight=sample_weights,
+            eval_set=[(X_train, Y_train_mapped), (X_val, Y_val_mapped)],
+            verbose=100
+        )
+
+        print(f"\n✅ 基礎訓練結束！最佳模型停在第 {base_model.best_iteration} 棵樹")
+
+        # 2. 🌟 關鍵修正：機率校準 (Isotonic Calibration)
+        # 因為我們用了 balanced weight，機率被嚴重扭曲。我們用 Val Set 將機率重新校準回真實比例。
+        # cv="prefit" 代表使用剛剛已經練好的 base_model
+        from sklearn.calibration import CalibratedClassifierCV
+        calibrated_model = CalibratedClassifierCV(base_model, method='isotonic', cv="prefit")
+        calibrated_model.fit(X_val, Y_val_mapped)
+
+        print("✅ 機率校準 (Calibration) 完成！現在模型輸出的 % 數可以信任了。")
+
+        return calibrated_model
+
+    def normalize_features_3way(
+            self, X_train: pd.DataFrame, X_val: pd.DataFrame, X_test: pd.DataFrame,
+    ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, RobustScaler]:
+
+        scaler = RobustScaler()
+        # ⚠️ 永遠只能用 Train data 來 fit
+        X_train_scaled = pd.DataFrame(scaler.fit_transform(X_train), columns=X_train.columns, index=X_train.index)
+
+        X_val_scaled = pd.DataFrame(scaler.transform(X_val), columns=X_val.columns, index=X_val.index)
+        X_test_scaled = pd.DataFrame(scaler.transform(X_test), columns=X_test.columns, index=X_test.index)
+
+        return X_train_scaled, X_val_scaled, X_test_scaled, scaler
+
+    def time_series_split_3way(
+            self,
+            X: pd.DataFrame,
+            Y: pd.Series,
+            train_ratio: float = 0.7,
+            val_ratio: float = 0.15,
+            gap: int = 20  # 🌟 新增：隔離區 (確保 lookahead 和 lag 絕對不會互相污染)
+    ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.Series, pd.Series, pd.Series]:
+        """
+        將時序資料嚴格切分為: Train, Validation, Test，並在交界處加入 Gap (Embargo)
+        """
+        train_end = int(len(X) * train_ratio)
+        val_start = train_end + gap
+        val_end = int(len(X) * (train_ratio + val_ratio))
+        test_start = val_end + gap
+
+        X_train, Y_train = X.iloc[:train_end], Y.iloc[:train_end]
+        X_val, Y_val = X.iloc[val_start:val_end], Y.iloc[val_start:val_end]
+        X_test, Y_test = X.iloc[test_start:], Y.iloc[test_start:]
+
+        print(f"嚴格切分 (含 {gap} 根 K 線 Gap) -> Train: {len(X_train)} | Val: {len(X_val)} | Test: {len(X_test)}")
+        return X_train, X_val, X_test, Y_train, Y_val, Y_test
+
+    def find_best_threshold_on_val(self, calibrated_model, X_val, Y_val):
+        """在 Validation Set 上尋找最佳信心門檻 (以做多的 Precision 為主)"""
+        print("\n🔍 正在 Validation Set 上尋找最佳信心門檻...")
+        Y_val_mapped = Y_val.map({-1: 0, 0: 1, 1: 2})
+        probabilities = calibrated_model.predict_proba(X_val)
+        p_long = probabilities[:, 2]
+
+        best_th = 0.50
+        best_precision = 0.0
+
+        for th in [0.45, 0.50, 0.55, 0.60]:
+            strong_long_idx = p_long > th
+            if np.sum(strong_long_idx) < 10:  # 如果觸發次數太少，這門檻沒意義
+                continue
+
+            # 算出這個門檻下，做多被猜中的比例 (Precision)
+            true_positives = np.sum((Y_val_mapped.values == 2) & strong_long_idx)
+            precision = true_positives / np.sum(strong_long_idx)
+
+            print(f"門檻 {th * 100}% -> 做多精準度 (Precision): {precision:.4f} | 觸發次數: {np.sum(strong_long_idx)}")
+
+            if precision > best_precision:
+                best_precision = precision
+                best_th = th
+
+        print(f"🏆 選定最佳信心門檻: {best_th * 100}%")
+        return best_th
+
+    def final_blind_test(self, calibrated_model, X_test, Y_test, best_threshold):
+        """使用剛才選定的門檻，對 Test Set 進行唯一一次的絕對盲測"""
+        print("\n" + "=" * 50)
+        print(f"🔥 最終絕對盲測 (Test Set) - 鎖定門檻: {best_threshold * 100}%")
+        print("=" * 50)
+
+        Y_test_mapped = Y_test.map({-1: 0, 0: 1, 1: 2})
+        probabilities = calibrated_model.predict_proba(X_test)
+
+        custom_predictions = np.ones(len(probabilities))
+        strong_short_idx = probabilities[:, 0] > best_threshold
+        strong_long_idx = probabilities[:, 2] > best_threshold
+
+        custom_predictions[strong_short_idx] = 0
+        custom_predictions[strong_long_idx] = 2
+        custom_predictions[strong_short_idx & strong_long_idx] = 1
+
+        target_names = ['Short (-1)', 'Hold (0)', 'Long (1)']
+        print(classification_report(Y_test_mapped, custom_predictions, target_names=target_names))
+
+        return custom_predictions
+
+    def evaluate_with_confidence(self, model, X_test, Y_test, confidence_threshold=0.50):
+        """
+        使用 predict_proba 取得機率，並加上自訂信心門檻過濾交易訊號。
+
+        :param confidence_threshold: 信心門檻 (例如 0.50 代表模型要有 50% 以上的把握才出手)
+        """
+        print(f"\n" + "=" * 50)
+        print(f"🎯 啟用機率決策模式 (信心門檻: {confidence_threshold * 100}%)")
+        print("=" * 50)
+
+        # 1. 轉換標籤以對應 XGBoost 的輸出格式 (0, 1, 2)
+        Y_test_mapped = Y_test.map({-1: 0, 0: 1, 1: 2})
+
+        # 2. 取得機率矩陣 (Shape: [樣本數, 3])
+        # 欄位對應: 0 -> Short (-1), 1 -> Hold (0), 2 -> Long (1)
+        probabilities = model.predict_proba(X_test)
+
+        # 3. 建立自訂的預測陣列 (預設全部填入 1，也就是 Hold)
+        custom_predictions = np.ones(len(probabilities))
+
+        # 4. 根據信心門檻覆蓋訊號
+        # 只有當 P(Short) 或 P(Long) 大於我們設定的門檻時，才真正出手
+        p_short = probabilities[:, 0]
+        p_long = probabilities[:, 2]
+
+        # 找出大於門檻的 index
+        strong_short_idx = p_short > confidence_threshold
+        strong_long_idx = p_long > confidence_threshold
+
+        # 將這些高信心的 index 標記為實際交易動作
+        custom_predictions[strong_short_idx] = 0  # 執行做空
+        custom_predictions[strong_long_idx] = 2  # 執行做多
+
+        # (防呆) 如果模型發生極端錯誤，同時給予 Long 和 Short 極高機率，強制轉為 Hold
+        conflict_idx = strong_short_idx & strong_long_idx
+        custom_predictions[conflict_idx] = 1
+
+        # 5. 印出過濾後的評估報告
+        target_names = ['Short (-1)', 'Hold (0)', 'Long (1)']
+        print(classification_report(Y_test_mapped, custom_predictions, target_names=target_names))
+
+        # 6. 統計「放棄交易」的比例
+        original_predictions = model.predict(X_test)
+        original_trades = np.sum((original_predictions == 0) | (original_predictions == 2))
+        new_trades = np.sum((custom_predictions == 0) | (custom_predictions == 2))
+
+        print(f"💡 交易次數變化: 原本 {original_trades} 次 -> 過濾後 {new_trades} 次")
+        if original_trades > 0:
+            print(f"💡 訊號過濾率: {((original_trades - new_trades) / original_trades) * 100:.2f}% 的低信心訊號被捨棄")
+
+        return custom_predictions, probabilities
+
 
 def train():
     # Fetch OHLCV data.
@@ -475,7 +663,7 @@ def train():
     print(f"整合後大表資料筆數: {len(mtf_df)}")
 
     # 測試未來 4 根 K 線，看漲/跌幅能否突破 0.3%, 0.4%, 0.5%
-    test_thresholds = [0.003, 0.004, 0.005]
+    test_thresholds = [0.005]
     lookahead_bars = 4
 
     for th in test_thresholds:
@@ -498,43 +686,37 @@ def train():
         print(Y.value_counts(normalize=True) * 100)  # 百分比分佈
         print(f"\n總樣本數: {len(X)}")
 
-        X_train, X_test, Y_train, Y_test = trainer.time_series_split(X, Y, split_ratio=0.8)
-        X_train_scaled, X_test_scaled, _ = trainer.normalize_features(X_train, X_test)
-        print(
-            f"{base_tf}: scaled train/test shape = "
-            f"{X_train_scaled.shape}/{X_test_scaled.shape}, target shape = {Y_train.shape}/{Y_test.shape}"
-        )
-        # # ==========================================
-        # # 訓練前資料理智檢查 (Sanity Check)
-        # # ==========================================
-        # print("\n" + "=" * 40)
-        # print("🚀 模型訓練前資料檢查 (Sanity Check)")
-        # print("=" * 40)
+        # X_train, X_test, Y_train, Y_test = trainer.time_series_split(X, Y, split_ratio=0.8)
+        # X_train_scaled, X_test_scaled, scaler = trainer.normalize_features(X_train, X_test)
+        # print(
+        #     f"{base_tf}: scaled train/test shape = "
+        #     f"{X_train_scaled.shape}/{X_test_scaled.shape}, target shape = {Y_train.shape}/{Y_test.shape}"
+        # )
         #
-        # # 1. 檢查特徵數量與名稱
-        # features = X_train_scaled.columns.tolist()
-        # print(f"✅ 最終輸入特徵數量: {len(features)} 個")
-        # print(f"✅ 前 10 個特徵範例: {features[:10]}")
-        #
-        # # 2. 檢查是否有任何價格或未預期的雜訊欄位混入
-        # suspicious_keywords = ['open', 'high', 'low', 'close', 'vol', 'start_time']
-        # leaked_features = [col for col in features if any(keyword in col.split('_') for keyword in suspicious_keywords)]
-        # if leaked_features:
-        #     print(f"❌ 警告！疑似有原始資料洩漏到特徵中: {leaked_features}")
-        # else:
-        #     print("✅ 特徵純淨度檢查通過，無原始價格/時間洩漏！")
-        #
-        # # 3. 檢查 NaN (歸一化後絕對不能有 NaN)
-        # has_nan = X_train_scaled.isnull().values.any()
-        # print(f"✅ 訓練集是否包含 NaN: {'是 (請檢查!)' if has_nan else '否 (完美!)'}")
-        #
-        # # 4. 印出一筆正規化後的資料，確保數值都在合理範圍 (-3 ~ 3 之間居多)
-        # print("\n📊 正規化後的特徵預覽 (前 2 筆):")
-        # pd.set_option('display.max_columns', 10)  # 限制印出的欄位數以免洗版
-        # print(X_train_scaled.head(2).round(4))
+        # # 執行模型訓練與評估
+        # model = trainer.train_xgboost_model_v2(X_train_scaled, Y_train, X_test_scaled, Y_test, th)
 
-        # 執行模型訓練與評估
-        model = trainer.train_xgboost_model_v2(X_train_scaled, Y_train, X_test_scaled, Y_test, th)
+        # 1. 三段切分 (Train, Val, Test) 含 Gap 防洩漏
+        X_train, X_val, X_test, Y_train, Y_val, Y_test = trainer.time_series_split_3way(X, Y, train_ratio=0.7,
+                                                                                        val_ratio=0.15)
+
+        # 2. 三段歸一化
+        X_train_scaled, X_val_scaled, X_test_scaled, scaler = trainer.normalize_features_3way(X_train, X_val, X_test)
+
+        # 3. 呼叫 V3 訓練 (此時只傳入 Train 和 Val，把 Test 藏好)
+        calibrated_model = trainer.train_xgboost_model_v3(X_train_scaled, Y_train, X_val_scaled, Y_val)
+
+        # 4. 在 Val 上決定最佳門檻 (看期中考卷抓重點)
+        best_th = trainer.find_best_threshold_on_val(calibrated_model, X_val_scaled, Y_val)
+
+        # 5. 在 Test 上執行最終盲測 (期末考唯一一次機會)
+        final_preds = trainer.final_blind_test(calibrated_model, X_test_scaled, Y_test, best_th)
+
+        # 6. 儲存 Calibration 過的模型
+        joblib.dump(calibrated_model, "calibrated_xgb_model_0.005.pkl")  # 注意：Calibrated 模型要存成 pkl
+        joblib.dump(scaler, "robust_scaler_0.005.pkl")
+        joblib.dump(X_train.columns.tolist(), "feature_columns.pkl")
+        print("✅ 嚴格盲測完成！檔案已匯出。")
 
 
 if __name__ == "__main__":
