@@ -1,0 +1,60 @@
+{
+  "vectorizer": {
+    "analyzer": "char_wb",
+    "ngram_range": [2, 4]
+  },
+  "default_model": "gpt-5-mini",
+  "routes": [
+    {
+      "name": "dev-automation-route",
+      "target_model": "gpt-5-mini",
+      "score_threshold": 0.4,
+      "utterances": [
+        "write a langchain tool for binance order execution",
+        "automate the generation of daily trading performance report",
+        "implement a python script to fetch btc sentiment from twitter/reddit",
+        "debug the websocket connection in binance_svc.py",
+        "create a fastapi endpoint for backtest result visualization",
+        "幫我寫一個 LangChain 的自定義工具來抓取交易所資訊",
+        "實作一個自動化腳本來發送交易訊號到 Telegram/Line",
+        "幫我寫一個處理 K 線資料並存入 CSV 的 Python 腳本",
+        "修復 LangChain Agent 在呼叫 API 時的連線錯誤",
+        "實作交易績效分析中的 Sharpe Ratio 計算函式"
+      ]
+    },
+    {
+      "name": "ml-quant-logic-route",
+      "target_model": "gpt-5",
+      "score_threshold": 0.45,
+      "utterances": [
+        "analyze why my langchain agent is stuck in an infinite loop",
+        "suggest feature engineering ideas for predicting crypto volatility",
+        "explain the performance drop in the test dataset during 2024 crypto crash",
+        "identify if this backtest result has overfitting risks",
+        "reason about the cause of high slippage in my automated execution",
+        "分析為什麼我的 LangChain Agent 邏輯陷入死迴圈",
+        "幫我針對虛擬貨幣的波動率預測給出特徵工程建議",
+        "分析為什麼這套 ML 策略在 2024 年震盪行情中表現不佳",
+        "檢查回測報告，找出是否存在過度擬合 (Overfitting) 的徵兆",
+        "推論自動化交易在執行時產生高度滑點 (Slippage) 的原因"
+      ]
+    },
+    {
+      "name": "strategic-analysis-route",
+      "target_model": "gpt-5",
+      "score_threshold": 0.35,
+      "utterances": [
+        "compare the backtest performance of strategy A vs strategy B in detail",
+        "design a multi-agent system architecture for a crypto quantitative fund",
+        "write a comprehensive analysis report for the bitcoin model trainer",
+        "summarize the logic of our financial ml workflow and suggest long-term improvements",
+        "provide a strategic review of the current technical indicator model architecture",
+        "詳細比較 A 策略與 B 策略的回測績效差異與風險指標",
+        "設計一套適用於量化交易的多代理 (Multi-Agent) 系統協作架構",
+        "撰寫一份完整的比特幣交易模型訓練報告與績效總結",
+        "總結目前的 Financial ML 實作流程並提出長期架構優化方向",
+        "評估目前的技術指標模型架構是否足以應對未來的市場制度轉換 (Regime Shift)"
+      ]
+    }
+  ]
+}

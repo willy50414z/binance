@@ -23,9 +23,11 @@
   - `1d`
 - Default training window:
   - `start_dt = 2024-03-01 00:00:00+00:00`
-  - `end_dt = 2026-03-01 00:00:00+00:00`
+  - `end_dt = datetime.now()` (dynamic)
 - Base timeframe for training and labeling:
   - `15m`
+- Dynamic Features:
+  - `log_return`, `rsi_14`, `macd_hist`, `kdj_j`, `cci_14`, `vol_pct_change`, `bb_percent_b`, `vwap_bias`, `obv_diff`, `mfi_14` (Added)
 
 可調項目：
 
@@ -147,20 +149,21 @@
 
 - Threshold search set:
   - `[0.45, 0.50, 0.55, 0.60, 0.65, 0.70]`
-- Search style:
-  - joint search over `(short_threshold, long_threshold)`
 - Prediction rule:
   - `p(short) > short_threshold` => `Short`
   - `p(long) > long_threshold` => `Long`
   - 都沒過 => `Hold`
-  - 同時都過 => 取 `p(short)` 與 `p(long)` 較大者
+  - 同時都過 => 優先取 `p(short)` 與 `p(long)` 較大者 (Stronger signal priority)
 - Current selection score order:
-  - `total_pnl`
+  - `expectancy * sqrt(coverage)` (Balanced score)
   - `sharpe`
+  - `total_pnl`
   - `profit_factor`
   - `total_trades`
-- Minimum trade filter:
+- Minimum filters:
   - `total_trades >= 5`
+  - `win_rate >= 0.40`
+  - `temporal_diversity` (Span >= 3 unique hours)
 
 可調項目：
 

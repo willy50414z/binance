@@ -41,8 +41,7 @@ Use these project-specific habits by default when working in this repo.
 ### Documentation Skill
 
 - Keep `Financial ML step by step.md` aligned with the actual code path, not an idealized design.
-- Record important findings, risks, and follow-up items in `session.md`.
-- If a workflow changes, update docs in the same task when feasible.
+- If a workflow changes, update the user-specified strategy-local docs in the same task when feasible.
 - If asked to review code and export suggested changes to a markdown file, read `knowledge-base/skills/code-review-md-export/SKILL.md` first and follow that workflow.
 - Strategy workflow:
     - each strategy has its own folder under `com/willy/trade_bot/ml/`
