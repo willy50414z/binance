@@ -1,11 +1,17 @@
 import json
-import os
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import RobustScaler
+
+# Ensure UTF-8 encoding for Windows consoles
+if sys.platform == "win32":
+    import io
+
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
 
 class MLService:
@@ -43,6 +49,11 @@ class MLService:
         標準金融時序 5 段切分框架:
         Train -> gap -> Val(EarlyStop) -> gap -> Val(Calib) -> gap -> Val(Thres) -> gap -> Test
         """
+        if X is None or X.empty or Y is None or Y.empty:
+            raise ValueError("Input X or Y is empty.")
+        if len(X) != len(Y):
+            raise ValueError(f"X/Y length mismatch: {len(X)} vs {len(Y)}")
+
         n = len(X)
         n_train = int(n * train_ratio)
         n_val_early = int(n * val_earlystop_ratio)
@@ -59,7 +70,7 @@ class MLService:
         test_start = val_th_end + gap
 
         if test_start >= n:
-            raise ValueError(f"Dataset too small for 5-way split with gap={gap}")
+            raise ValueError(f"Dataset too small (n={n}) for 5-way split with gap={gap}")
 
         return (
             X.iloc[:train_end], X.iloc[val_early_start:val_early_end],
@@ -70,19 +81,27 @@ class MLService:
             Y.iloc[test_start:]
         )
 
-    def normalize_features_5way(self, *dataframes):
-        """使用 RobustScaler 對多段資料進行統一標準化"""
+    def normalize_features_5way(
+            self,
+            X_train: pd.DataFrame,
+            X_val_early: pd.DataFrame,
+            X_val_cal: pd.DataFrame,
+            X_val_th: pd.DataFrame,
+            X_test: pd.DataFrame,
+    ):
+        """使用 RobustScaler 對 5 段資料進行標準化，確保只在 Train 上 fit"""
         scaler = RobustScaler()
-        train_df = dataframes[0]
-        scaler.fit(train_df)
-        
-        scaled_dfs = [
-            pd.DataFrame(scaler.transform(df), columns=df.columns, index=df.index)
-            for df in dataframes
-        ]
-        return (*scaled_dfs, scaler)
+        X_train_scaled = pd.DataFrame(scaler.fit_transform(X_train), columns=X_train.columns, index=X_train.index)
+        X_val_early_scaled = pd.DataFrame(scaler.transform(X_val_early), columns=X_val_early.columns,
+                                          index=X_val_early.index)
+        X_val_cal_scaled = pd.DataFrame(scaler.transform(X_val_cal), columns=X_val_cal.columns, index=X_val_cal.index)
+        X_val_th_scaled = pd.DataFrame(scaler.transform(X_val_th), columns=X_val_th.columns, index=X_val_th.index)
+        X_test_scaled = pd.DataFrame(scaler.transform(X_test), columns=X_test.columns, index=X_test.index)
 
-    def export_experiment_report(self, experiment_name: str, walk_forward_df: pd.DataFrame, metadata: dict, feature_cols: list):
+        return X_train_scaled, X_val_early_scaled, X_val_cal_scaled, X_val_th_scaled, X_test_scaled, scaler
+
+    def export_experiment_report(self, experiment_name: str, walk_forward_df: pd.DataFrame, metadata: dict,
+                                 feature_cols: list):
         """
         產出結構化的實驗報告
         """
@@ -117,10 +136,40 @@ class MLService:
 *Powered by MLService*
 """
         report_path.write_text(report_content, encoding="utf-8")
-        
+
         # 同步儲存 metadata.json
         metadata_path = report_dir / "metadata.json"
         metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
-        
+
         print(f"\n✅ Experiment [{experiment_name}] results saved to: {report_dir}")
         return report_path
+
+    def stage_model_bundle(self, source_dir: Path, target_dir: Path, files_to_copy: list[str]):
+        """
+        將模型成果從 source_dir 發布到 target_dir (通常是 production 目錄)。
+        """
+        import shutil
+        print(f"📦 Staging model bundle from {source_dir} to {target_dir}...")
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        copied_files = []
+        for f in files_to_copy:
+            src_file = source_dir / f
+            if src_file.exists():
+                shutil.copy2(src_file, target_dir / f)
+                copied_files.append(f)
+                print(f"  - Copied {f}")
+            else:
+                print(f"  - ⚠️ Warning: {f} not found in {source_dir}")
+
+        # 建立發布資訊
+        info = {
+            "staged_at": datetime.now(timezone.utc).isoformat(),
+            "source_dir": str(source_dir.absolute()),
+            "copied_files": copied_files,
+        }
+        info_path = target_dir / "staged_info.json"
+        with open(info_path, "w", encoding="utf-8") as f_info:
+            json.dump(info, f_info, indent=4)
+
+        print(f"✅ Staged model info saved to {info_path}")

@@ -4,6 +4,7 @@ import subprocess
 from pathlib import Path
 
 from com.willy.trade_bot.enums.llm_target import LLMTarget
+from com.willy.trade_bot.service.litellm_route_svc import select_model_for_prompt
 
 _ALLOW_ALL_OPENCODE_PERMISSION = {
     "bash": "allow",
@@ -24,6 +25,18 @@ _ALLOW_ALL_OPENCODE_PERMISSION = {
     "doom_loop": "allow",
     "skill": "allow",
 }
+_CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
+_TARGET_ROUTER_CONFIG = {
+    LLMTarget.GEMINI: _CONFIG_DIR / "llm_model_router_gemini.json",
+    LLMTarget.CODEX: _CONFIG_DIR / "llm_model_router_codex.json",
+}
+
+
+def _select_model(target: LLMTarget, prompt: str) -> str | None:
+    config_path = _TARGET_ROUTER_CONFIG.get(target)
+    if config_path is None:
+        return None
+    return select_model_for_prompt(prompt, config_path=config_path)
 
 
 def run_once(
@@ -38,10 +51,17 @@ def run_once(
         raise ValueError("prompt must not be empty.")
 
     work_dir = str(Path(cwd).resolve()) if cwd else None
+    model_name = _select_model(target, prompt)
     if target == LLMTarget.GEMINI:
-        command = ["gemini", "--approval-mode", "yolo", "--sandbox", "false", "--prompt", prompt]
+        command = ["gemini", "--approval-mode", "yolo", "--sandbox", "false"]
+        if model_name:
+            command.extend(["--model", model_name])
+        command.extend(["--prompt", prompt])
     elif target == LLMTarget.CODEX:
-        command = ["codex", "exec", "--dangerously-bypass-approvals-and-sandbox", prompt]
+        command = ["codex", "exec", "--dangerously-bypass-approvals-and-sandbox"]
+        if model_name:
+            command.extend(["--model", model_name])
+        command.append(prompt)
     elif target == LLMTarget.OPENCODE:
         command = ["opencode", "run"]
         command.extend(["--dir", work_dir or str(Path.cwd())])

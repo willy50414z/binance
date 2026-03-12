@@ -1,6 +1,14 @@
+import argparse
 import json
+import shutil
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+# Ensure UTF-8 encoding for Windows consoles
+if sys.platform == "win32":
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
 import joblib
 import numpy as np
@@ -48,8 +56,8 @@ class BinanceTechIdxModelTrainer:
     DYNAMIC_LAG_RANGE = range(1, 6)
     DEFAULT_LOOKAHEAD = 4
     DEFAULT_ATR_MULTIPLIER = 1.5
-    DEFAULT_END_DT = datetime(2026, 3, 1, tzinfo=timezone.utc)
-    DEFAULT_START_DT = DEFAULT_END_DT - timedelta(days=730)
+    DEFAULT_END_DT = None # Now dynamic
+    DEFAULT_START_DT = None # Now dynamic
     DEFAULT_THRESHOLD_GRID = [0.45, 0.50, 0.55, 0.60, 0.65, 0.70]
 
     def __init__(self, market_type: MarketType = MarketType.FUTURE):
@@ -59,9 +67,9 @@ class BinanceTechIdxModelTrainer:
 
     def fetch_ohlcv(self, start_dt: datetime = None, end_dt: datetime = None) -> dict[str, pd.DataFrame]:
         if end_dt is None:
-            end_dt = self.DEFAULT_END_DT
+            end_dt = datetime.now(timezone.utc)
         if start_dt is None:
-            start_dt = self.DEFAULT_START_DT
+            start_dt = end_dt - timedelta(days=730)
 
         target_timeframes = [
             Timeframe.MINUTE_15,
@@ -671,6 +679,13 @@ class BinanceTechIdxModelTrainer:
             json.dump(thresholds, f, indent=4)
         print(f"Model bundle saved to {output_dir}")
 
+    def stage_model_bundle(self, source_dir: Path, target_dir: Path):
+        """
+        Stage a model bundle from a source directory to a production directory.
+        """
+        files_to_copy = ["model.joblib", "scaler.joblib", "thresholds.json"]
+        self.ml_svc.stage_model_bundle(source_dir, target_dir, files_to_copy)
+
 
 def train(experiment_name: str = "default_experiment", start_dt: datetime = None, end_dt: datetime = None, output_dir: Path = None):
     trainer = BinanceTechIdxModelTrainer()
@@ -713,13 +728,56 @@ def train(experiment_name: str = "default_experiment", start_dt: datetime = None
         trainer.ml_svc.export_experiment_report(
             experiment_name, walk_forward_df, metadata, trainer.model_feature_columns()
         )
-        
+
         if output_dir and last_model_bundle:
             trainer.save_model_bundle(last_model_bundle, output_dir)
-        
+
     return walk_forward_df
 
 
+def stage(source_dir: Path = None, target_dir: Path = None):
+    trainer = BinanceTechIdxModelTrainer()
+    if target_dir is None:
+        target_dir = Path(__file__).parent / "production"
+
+    if source_dir is None:
+        generated_dir = Path(__file__).parent / "generated"
+        if not generated_dir.exists():
+            print(f"No generated directory found at {generated_dir}")
+            return
+
+        # Find latest model directory in generated/
+        model_dirs = sorted([d for d in generated_dir.iterdir() if d.is_dir() and d.name.startswith("model_")])
+        if not model_dirs:
+            print(f"No model directories found in {generated_dir}")
+            return
+        source_dir = model_dirs[-1]
+
+    trainer.stage_model_bundle(source_dir, target_dir)
+
+
 if __name__ == "__main__":
-    output_path = Path("E:/Code/bianace/com/willy/trade_bot/ml/bti_xgb_v1/generated/model_20260311182006")
-    train(experiment_name="baseline_v1", output_dir=output_path)
+    parser = argparse.ArgumentParser(description="Binance Technical Indicator Model Trainer")
+    subparsers = parser.add_subparsers(dest="command", help="Commands")
+
+    # Train command
+    train_parser = subparsers.add_parser("train", help="Train a new model")
+    train_parser.add_argument("--name", type=str, default="baseline_v1", help="Experiment name")
+    train_parser.add_argument("--output", type=str, help="Output directory for the model")
+
+    # Stage command
+    stage_parser = subparsers.add_parser("stage", help="Stage a model to production")
+    stage_parser.add_argument("--source", type=str, help="Source model directory")
+    stage_parser.add_argument("--target", type=str, help="Target production directory")
+
+    args = parser.parse_args()
+
+    if args.command == "train":
+        output_path = Path(args.output) if args.output else Path(__file__).parent / "generated" / f"model_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        train(experiment_name=args.name, output_dir=output_path)
+    elif args.command == "stage":
+        source_path = Path(args.source) if args.source else None
+        target_path = Path(args.target) if args.target else None
+        stage(source_dir=source_path, target_dir=target_path)
+    else:
+        parser.print_help()

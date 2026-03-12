@@ -19,7 +19,32 @@ from com.willy.binance.enums.binance_product import BinanceProduct
 from com.willy.binance.enums.api_user import ApiUser
 from com.willy.binance.ml.bitcoin_trading_model import BitcoinTradingModel
 
-def train_and_save():
+import os
+import sys
+import argparse
+import json
+import shutil
+from pathlib import Path
+from datetime import datetime, timedelta, timezone
+
+# Ensure project root is in sys.path
+repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
+if repo_root not in sys.path:
+    sys.path.append(repo_root)
+
+from com.willy.binance.config.config_util import config_util
+
+configured_root = config_util("project.path").get("root_dir")
+if configured_root not in sys.path:
+    sys.path.append(configured_root)
+
+from com.willy.binance.service.binance_svc import BinanceSvc
+from com.willy.binance.enums.binance_product import BinanceProduct
+from com.willy.binance.enums.api_user import ApiUser
+from com.willy.binance.ml.bitcoin_trading_model import BitcoinTradingModel
+
+
+def train(output_path: str = None):
     print("Initializing Binance Service...")
     # Using HEDGE_BUY as default user, connect to Mainnet for history
     svc = BinanceSvc(api_user=ApiUser.HEDGE_BUY, is_demo=False, is_testnet=False)
@@ -54,6 +79,7 @@ def train_and_save():
     df = model.calculate_features(df, drop_na=True)
     
     # Ensure index is datetime
+    import pandas as pd
     if not isinstance(df.index, pd.DatetimeIndex):
          df.index = pd.to_datetime(df['start_time'])
 
@@ -86,34 +112,85 @@ def train_and_save():
     print("Training Complete.")
 
     # 6. Save Model
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    model_dir = os.path.join(script_dir, 'models')
-    os.makedirs(model_dir, exist_ok=True)
+    if output_path is None:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        model_dir = os.path.join(script_dir, 'models')
+        os.makedirs(model_dir, exist_ok=True)
+        output_path = os.path.join(model_dir, f'bitcoin_model_{datetime.now().strftime("%Y%m%d%H%M%S")}.pkl')
     
-    model_path = os.path.join(model_dir, 'bitcoin_model_v1.pkl')
-    model.save_model(model_path)
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    model.save_model(output_path)
     
     # 7. Verification / Sanity Check on Test Data
     print("Running sanity check on Test Data...")
     if len(test_df) > 0:
         try:
-            # We predict on the Test set to see if code runs.
-            # Real performance evaluation should be done via Backtesting (Freqtrade).
             preds = model.predict(test_df)
-            
-            # Simple stats
-            n_long = sum(preds > 0.5) # Assuming binary output is 0 or 1, or probability?
-            # predict returns probability or class? 
-            # LGBMRegressor returns float. LGBMClassifier predict returns class?
-            # In train_lgbm we used lgb.train which returns a Booster. predict returns raw scores/probs.
-            # If objective='binary', it returns probabilities.
-            
             print(f"Test Set Predictions (first 10): {preds[:10]}")
             print(f"Average Prediction Probability: {preds.mean():.4f}")
             print(f"Min: {preds.min():.4f}, Max: {preds.max():.4f}")
-            
         except Exception as e:
             print(f"Prediction on test set failed: {e}")
 
+    return output_path
+
+
+def stage(source_path: str = None, target_dir: str = None):
+    if target_dir is None:
+        target_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'production')
+    
+    os.makedirs(target_dir, exist_ok=True)
+
+    if source_path is None:
+        model_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'models')
+        if not os.path.exists(model_dir):
+            print(f"No models directory found at {model_dir}")
+            return
+        
+        # Find latest .pkl file
+        models = sorted([f for f in os.listdir(model_dir) if f.endswith('.pkl')])
+        if not models:
+            print(f"No .pkl models found in {model_dir}")
+            return
+        source_path = os.path.join(model_dir, models[-1])
+
+    print(f"📦 Staging model from {source_path} to {target_dir}...")
+    model_name = os.path.basename(source_path)
+    target_path = os.path.join(target_dir, 'bitcoin_model_production.pkl')
+    
+    shutil.copy2(source_path, target_path)
+    print(f"  - Copied to {target_path}")
+
+    # Create staged_info.json
+    info = {
+        "staged_at": datetime.now(timezone.utc).isoformat(),
+        "source_file": source_path,
+        "target_file": target_path
+    }
+    with open(os.path.join(target_dir, 'staged_info.json'), 'w', encoding='utf-8') as f:
+        json.dump(info, f, indent=4)
+    print(f"✅ Staged model info saved to {target_dir}/staged_info.json")
+
+
 if __name__ == "__main__":
-    train_and_save()
+    parser = argparse.ArgumentParser(description="Bitcoin Trading Model Trainer")
+    subparsers = parser.add_subparsers(dest="command", help="Commands")
+
+    # Train command
+    train_parser = subparsers.add_parser("train", help="Train a new model")
+    train_parser.add_argument("--output", type=str, help="Output path for the model .pkl")
+
+    # Stage command
+    stage_parser = subparsers.add_parser("stage", help="Stage a model to production")
+    stage_parser.add_argument("--source", type=str, help="Source model .pkl file")
+    stage_parser.add_argument("--target", type=str, help="Target production directory")
+
+    args = parser.parse_args()
+
+    if args.command == "train":
+        train(output_path=args.output)
+    elif args.command == "stage":
+        stage(source_path=args.source, target_dir=args.target)
+    else:
+        # Default behavior for backward compatibility
+        train()

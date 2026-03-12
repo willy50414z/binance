@@ -43,8 +43,8 @@ This file contains project-specific instructions and rules for Gemini CLI when w
 
 ### Documentation Skill
 - **Alignment:** Keep `Financial ML step by step.md` aligned with the actual code path.
-- **Session Records:** Record important findings, risks, and follow-up items in `session.md`.
-- **Workflow Updates:** If a workflow changes, update the relevant documentation in the same task.
+- **Workflow Updates:** If a workflow changes, update the user-specified strategy-local documentation in the same task when asked.
+- **No Default Export:** Do not create extra review or session markdown files unless the user explicitly asks for that file-level update.
 
 ## Preferred Output Style
 
