@@ -13,6 +13,7 @@
 /.vscode/launch.json
 /.vscode/settings.json
 /com/willy/binance/freqtrade/user_data/**
+/com/willy/trade_bot/freqtrade/user_data/**
 /com/willy/trade_bot/data/
 /com/willy/trade_bot/ml/bti_xgb_v1/generated/
 __pycache__/

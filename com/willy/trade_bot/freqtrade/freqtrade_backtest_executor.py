@@ -2,59 +2,37 @@ import json
 import os
 import subprocess
 import sys
-import zipfile
-from dataclasses import dataclass
-from typing import Any
 
 import pyperclip
 
-# Allow running this file directly (python com/willy/.../freqtrade_executor.py)
+# Allow running this file directly (python com/willy/.../freqtrade_backtest_executor.py)
 # while still supporting absolute imports like `com.willy...`.
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-from com.willy.binance.config.config_util import config_util
+from com.willy.trade_bot.config.config_util import config_util
 
 ROOT_DIR = os.path.normpath(config_util("project.path").get("root_dir"))
-FREQTRADE_DIR = os.path.join(ROOT_DIR, "com", "willy", "binance", "freqtrade")
+FREQTRADE_DIR = os.path.join(ROOT_DIR, "com", "willy", "trade_bot", "freqtrade")
 RESULTS_DIR = os.path.join(FREQTRADE_DIR, "user_data", "backtest_results")
 USERDIR = os.path.join(FREQTRADE_DIR, "user_data")
-STRATEGY_PATH = os.path.join(FREQTRADE_DIR, "BTCShortMA")
-TIMERANGE = "20250101-20260101"
+STRATEGY_PATH = os.path.join(FREQTRADE_DIR, "strategy", "AMRS(ATR-Driven Mean Reversion Short")
+TIMERANGE = "20240101-20261231"
 CONFIG_PATH = os.path.join(FREQTRADE_DIR, "config.json")
 
-MODE = "backtesting"  # Options: "backtesting" or "hyperopt"
-HYPEROPT_EPOCHS = 100
-
-# When running backtesting, run hyperopt once first.
-RUN_HYPEROPT_BEFORE_BACKTESTING = False
-
-# Multi-strategy support (kept minimal on purpose).
 STRATEGIES = [
-    "BTCShortMA_v1",
+    "AMRS3_9Strategy",
 ]
 
 # Backtesting CLI supports exporting only one artifact at a time (trades OR signals) in your current version.
 EXPORT_TRADES = False
 EXPORT_SIGNALS = True
 
-# Output reports next to backtest results.
 REPORTS_DIR = os.path.join(RESULTS_DIR, "reports")
 CHARTS_DIR = os.path.join(REPORTS_DIR, "charts")
-EXPORT_TRADE_CHART = True
 
 LAST_RESULT_FILE = os.path.join(RESULTS_DIR, ".last_result.json")
-
-
-@dataclass(frozen=True)
-class RunArtifacts:
-    stem: str
-    json_path: str | None
-    signals_path: str | None
-    meta_path: str | None
-    zip_path: str | None
-    extracted_dir: str | None
 
 
 def _ensure_dir(path: str) -> None:
@@ -62,7 +40,6 @@ def _ensure_dir(path: str) -> None:
 
 
 def _print_cmd(cmd: list[str]) -> None:
-    # Keep a readable representation without relying on shell quoting.
     print("Executing:", " ".join(cmd))
 
 
@@ -83,7 +60,6 @@ def _run_cmd(cmd: list[str], note: str | None = None, cwd: str | None = None) ->
         )
         return cp.returncode, cp.stdout or "", cp.stderr or ""
     except FileNotFoundError:
-        # Fallback for environments where "freqtrade" is a shell shim (rare).
         cmd_str = subprocess.list2cmdline(cmd)
         cp = subprocess.run(
             cmd_str,
@@ -148,30 +124,6 @@ def run_backtesting(strategy_name: str, export: str) -> tuple[int, str, str, str
     return ret, stdout, stderr, stem
 
 
-def run_hyperopt(strategy_name: str) -> tuple[int, str, str]:
-    cmd = [
-        "freqtrade",
-        "hyperopt",
-        "--config",
-        CONFIG_PATH,
-        "--strategy",
-        strategy_name,
-        "--strategy-path",
-        STRATEGY_PATH,
-        "--userdir",
-        USERDIR,
-        "--timerange",
-        TIMERANGE,
-        "-e",
-        str(HYPEROPT_EPOCHS),
-        "--hyperopt-loss",
-        "SortinoHyperOptLoss",
-        "-j",
-        "4",
-    ]
-    return _run_cmd(cmd, note="Note: Hyperopt may take several minutes...")
-
-
 def _save_execution_result(strategy_name: str, stem: str) -> None:
     data = {
         "strategy_name": strategy_name,
@@ -189,10 +141,8 @@ def main() -> None:
     _ensure_dir(CHARTS_DIR)
 
     print("=" * 60)
-    print(f"Freqtrade {MODE.title()} Executor")
+    print("Freqtrade Backtesting Executor")
     print(f"Timerange: {TIMERANGE}")
-    if MODE == "hyperopt":
-        print(f"Epochs: {HYPEROPT_EPOCHS}")
     print("=" * 60)
 
     for strategy_name in STRATEGIES:
@@ -200,21 +150,6 @@ def main() -> None:
         print(f"Strategy: {strategy_name}")
         print("-" * 60)
 
-        if MODE == "hyperopt":
-            ret, stdout, stderr = run_hyperopt(strategy_name)
-            if ret != 0:
-                report = (
-                    f"Hyperopt Error (exit code: {ret})\n\n"
-                    f"Output:\n{stdout}\n\nSTDERR:\n{stderr}"
-                )
-                pyperclip.copy(report)
-                print(report)
-                return
-            pyperclip.copy(stdout)
-            print("Hyperopt completed. Output copied to clipboard.")
-            continue
-
-        # backtesting mode
         stem: str | None = None
         ret = 0
 
@@ -252,7 +187,7 @@ def main() -> None:
 
         _save_execution_result(strategy_name, stem)
         print(f"\nBacktesting completed. Stem: {stem}")
-        print(f"Run analyze_backtest_result.py to analyze the results.")
+        print("Run analyze_backtest_result.py to analyze the results.")
 
 
 if __name__ == "__main__":
