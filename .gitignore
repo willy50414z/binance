@@ -15,3 +15,6 @@
 /com/willy/binance/freqtrade/user_data/**
 /com/willy/trade_bot/data/
 /com/willy/trade_bot/ml/bti_xgb_v1/generated/
+__pycache__/
+*.py[cod]
+*$py.class
