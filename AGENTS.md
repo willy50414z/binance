@@ -2,7 +2,7 @@
 
 ## Shared Project Skill
 
-Read and follow [ai_agent_skill.md](./ai_agent_skill.md) first. It is the shared source of truth for project-specific AI agent instructions in this repository.
+Read and follow [ai_agent_skill.md](./knowledge-base/skills/ai_agent_skill.md) first. It is the shared source of truth for project-specific AI agent instructions in this repository.
 
 ## Agent-Specific Notes
 
